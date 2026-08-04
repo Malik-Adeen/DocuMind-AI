@@ -21,8 +21,6 @@
       "Bash(git reset --hard *)",
       "Bash(rm -rf *)",
       "Bash(rm -fr *)",
-      "Read(**/evals/golden/sealed/**)",
-      "Edit(**/evals/golden/sealed/**)",
       "Read(**/evals/golden/**)",
       "Edit(**/evals/golden/**)"
     ]
