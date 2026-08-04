@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://internal/doc-intel/extraction-schema-0.1.0.json",
+  "title": "ExtractionResult",
+  "description": "The only shape an extraction result ever takes. LLM output, DB row, API response and Excel columns all derive from this. Field declaration order defines Excel column order.",
+  "type": "object",
+  "required": ["document_id", "pipeline_version", "document_type", "fields", "status"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "source": {
+      "type": "object",
+      "description": "Provenance. A field with no source is a bug, not a low-confidence result (INV-2).",
+      "required": ["origin"],
+      "additionalProperties": false,
+      "properties": {
+        "origin": { "enum": ["ocr_latin", "ocr_urdu", "llm_inferred", "human", "computed"] },
+        "page": { "type": "integer", "minimum": 1 },
+        "bbox": {
+          "type": "array",
+          "description": "[x0, y0, x1, y1] normalised 0..1",
+          "items": { "type": "number", "minimum": 0, "maximum": 1 },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "raw_text": { "type": "string" }
+      }
+    },
+
+    "field": {
+      "type": "object",
+      "required": ["value", "confidence", "verified", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": ["string", "null"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "verified": {
+          "type": "boolean",
+          "description": "True only if a deterministic gate confirmed it, or a human corrected it. Distinct from high confidence."
+        },
+        "gate": {
+          "type": ["string", "null"],
+          "description": "Which validator ran, e.g. iban_checksum, cnic_digit_count, arithmetic_reconciliation, date_parse, none"
+        },
+        "gate_error": { "type": ["string", "null"] },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    },
+
+    "money_field": {
+      "allOf": [{ "$ref": "#/$defs/field" }],
+      "description": "value is a decimal string, e.g. '45000.00'. Never a float — no binary rounding on billing numbers.",
+      "properties": {
+        "value": { "type": ["string", "null"], "pattern": "^-?[0-9]+\\.[0-9]{2}$" }
+      }
+    }
+  },
+
+  "properties": {
+    "document_id": { "type": "string", "format": "uuid" },
+    "extraction_id": { "type": "string", "format": "uuid" },
+    "pipeline_version": {
+      "type": "object",
+      "description": "Stamped on every extraction. Two results are only comparable if these match.",
+      "required": ["ocr_latin", "ocr_urdu", "llm", "prompt_hash"],
+      "properties": {
+        "ocr_latin": { "type": "string", "examples": ["paddleocr-pp-ocrv5"] },
+        "ocr_urdu": { "type": "string", "examples": ["qaari-0.1-urdu"] },
+        "llm": { "type": "string", "examples": ["qwen2.5-7b-instruct"] },
+        "prompt_hash": { "type": "string" },
+        "schema_version": { "type": "string", "const": "0.1.0" }
+      }
+    },
+    "status": { "enum": ["complete", "needs_review", "failed"] },
+    "document_type": {
+      "type": "object",
+      "required": ["value", "confidence"],
+      "properties": {
+        "value": { "enum": ["invoice", "purchase_order", "contract", "quotation", "billing_sheet", "unknown"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "language": {
+      "type": "object",
+      "properties": {
+        "primary": { "enum": ["en", "ur", "mixed", "unknown"] },
+        "confidence": { "type": "number" }
+      }
+    },
+
+    "fields": {
+      "type": "object",
+      "description": "Declaration order here IS the Excel column order.",
+      "additionalProperties": false,
+      "properties": {
+        "po_number":        { "$ref": "#/$defs/field" },
+        "invoice_number":   { "$ref": "#/$defs/field" },
+        "customer_name":    { "$ref": "#/$defs/field" },
+        "vendor_name":      { "$ref": "#/$defs/field" },
+        "cnic":             { "$ref": "#/$defs/field" },
+        "iban":             { "$ref": "#/$defs/field" },
+        "service_type":     { "$ref": "#/$defs/field" },
+        "effective_date":   { "$ref": "#/$defs/field" },
+        "expiry_date":      { "$ref": "#/$defs/field" },
+        "currency":         { "$ref": "#/$defs/field" },
+        "mrc":              { "$ref": "#/$defs/money_field" },
+        "otc":              { "$ref": "#/$defs/money_field" },
+        "subtotal":         { "$ref": "#/$defs/money_field" },
+        "tax":              { "$ref": "#/$defs/money_field" },
+        "total":            { "$ref": "#/$defs/money_field" },
+        "billing_terms":    { "$ref": "#/$defs/field" },
+        "notes":            { "$ref": "#/$defs/field" }
+      }
+    },
+
+    "line_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": { "$ref": "#/$defs/field" },
+          "quantity":    { "$ref": "#/$defs/field" },
+          "unit_price":  { "$ref": "#/$defs/money_field" },
+          "line_total":  { "$ref": "#/$defs/money_field" }
+        }
+      }
+    },
+
+    "gates": {
+      "type": "array",
+      "description": "Every deterministic validator that ran, and its verdict. Authoritative over the LLM (INV-5).",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed"],
+        "properties": {
+          "name": { "enum": ["iban_checksum", "cnic_digit_count", "arithmetic_reconciliation", "date_parse", "currency_consistency", "line_item_sum"] },
+          "passed": { "type": "boolean" },
+          "detail": { "type": "string" },
+          "affected_fields": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    "review": {
+      "type": "object",
+      "properties": {
+        "required": { "type": "boolean" },
+        "reason": { "type": "string", "examples": ["gate_failed:arithmetic_reconciliation", "low_confidence:mrc"] },
+        "reviewed_by": { "type": ["string", "null"] },
+        "reviewed_at": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+
+    "timings_ms": {
+      "type": "object",
+      "properties": {
+        "ocr_latin": { "type": "integer" },
+        "ocr_urdu": { "type": "integer" },
+        "llm": { "type": "integer" },
+        "validation": { "type": "integer" },
+        "total": { "type": "integer" }
+      }
+    },
+
+    "created_at": { "type": "string", "format": "date-time" }
+  }
+}

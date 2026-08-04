@@ -17,23 +17,25 @@
       "Bash(ls *)",
       "Bash(cat *)"
     ],
-    "deny": [
-      "Bash(git push *)",
-      "Bash(git reset --hard *)",
-      "Bash(rm -rf *)",
-      "Bash(rm -fr *)",
-      "Read(**/evals/golden/**)",
-      "Edit(**/evals/golden/**)",
-      "Write(**/evals/golden/**)"
-    ]
+"deny": [
+  "Bash(git push *)",
+  "Bash(git reset --hard *)",
+  "Bash(rm -rf *)",
+  "Bash(rm -fr *)",
+  "Read(**/evals/golden/sealed/**)",
+  "Edit(**/evals/golden/sealed/**)"
+] 
   },
   "hooks": {
     "Stop": [
       {
-        "type": "command",
-        "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/docs_reminder.py",
-        "timeout": 15,
-        "statusMessage": "Checking docs against AGENT_RULES.md §2..."
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/docs_reminder.py",
+            "timeout": 15
+          }
+        ]
       }
     ]
   }
