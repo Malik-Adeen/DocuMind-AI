@@ -1,0 +1,44 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# node
+node_modules/
+.npm/
+.pnpm-store/
+*.tsbuildinfo
+.next/
+.nuxt/
+.svelte-kit/
+.turbo/
+
+# env
+.env
+.env.*
+!.env.example
+
+# obsidian
+.obsidian/
+
+# claude code — settings.json is shared, local overrides and approvals are not
+.claude/settings.local.json
+.claude/settings.local.json.tmp.*
+
+# golden set — real customer documents, never committed.
+# The directory shape is tracked (.gitkeep) so a clone has somewhere to put them.
+# Leading **/ is required: the golden set lives at CodeBase/backend/evals/golden/,
+# and a pattern with an interior slash is anchored to this file's directory.
+**/evals/golden/**
+!**/evals/golden/dev/
+!**/evals/golden/sealed/
+!**/evals/golden/**/.gitkeep

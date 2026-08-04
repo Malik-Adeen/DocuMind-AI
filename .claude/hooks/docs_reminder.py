@@ -5,7 +5,7 @@ Source of truth is the git working tree, not the session transcript. Claude Code
 documents no schema for the transcript JSONL and does not document a per-session
 list of edited files, so there is no supported way to ask "what did this session
 edit". The working tree answers a slightly broader question -- "what is uncommitted
-right now" -- which is the question AGENT_RULES.md 2 actually cares about, since
+right now" -- which is the question AGENT_RULES.md §2 actually cares about, since
 the rule binds the commit, not the session.
 
 Never blocks. Exit 0 always.
@@ -77,7 +77,7 @@ def main():
         f"Code changed, no doc changed. Uncommitted under backend/app/ or backend/tests/:\n"
         f"{listed}\n"
         f"Nothing under Docs/ is modified.\n\n"
-        f"Check the trigger table in {RULES} 2 -- it maps each code area to the "
+        f"Check the trigger table in {RULES} §2 -- it maps each code area to the "
         f"document that change obliges you to update, in the same commit. If your change "
         f"genuinely fits no row, say so in the commit message rather than skipping silently."
     )
@@ -86,7 +86,7 @@ def main():
         json.dumps(
             {
                 "systemMessage": f"docs check: {len(code)} code file(s) changed, Docs/ untouched "
-                f"-- see {RULES} 2",
+                f"-- see {RULES} §2",
                 "hookSpecificOutput": {
                     "hookEventName": "Stop",
                     "additionalContext": warning,

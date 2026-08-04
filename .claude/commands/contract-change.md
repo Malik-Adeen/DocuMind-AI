@@ -6,8 +6,8 @@ disable-model-invocation: true
 
 Proposed contract change: $ARGUMENTS
 
-**STOP. Do not edit `../Docs/API_CONTRACT.md` yet.** It is co-owned by backend and frontend and
-neither side changes it unilaterally — `../Docs/PROJECT_CONTEXT.md` §4.
+**STOP. Do not edit `Docs/API_CONTRACT.md` yet.** It is co-owned by backend and frontend and
+neither side changes it unilaterally — `Docs/PROJECT_CONTEXT.md` §4.
 
 First state, and wait for my confirmation:
 
