@@ -2,12 +2,12 @@
 status: draft
 owner: Adeen & Frontend
 last_reviewed: 2026-08-04
-version: 0.1.1
+version: 0.2.0
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.1.1 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.2.0 · **Status:** Draft — freeze before frontend work starts
 **Owners:** backend (Adeen) + frontend (friend). Changes require both.
 
 Base path: `/api/v1`. All bodies JSON unless stated. All timestamps ISO-8601 UTC.
@@ -89,6 +89,35 @@ Every field object carries `value`, `confidence`, `verified`, `source` (page + b
 **Frontend must render `verified: false` visually distinct from low confidence** — they are
 different failures. Low confidence = model unsure. Unverified = a deterministic gate could not
 confirm it.
+
+### Gate results are three-state (new in 0.2.0)
+
+`gates[].passed` (boolean) is **removed**. It is replaced by `gates[].result`:
+
+```
+"gates": [
+  { "name": "iban_checksum",     "result": "passed",      "affected_fields": ["iban"] },
+  { "name": "cnic_format_check", "result": "format_only", "affected_fields": ["cnic"] }
+]
+```
+
+| `result` | Means | `verified` |
+|---|---|---|
+| `passed` | A deterministic check confirmed the value | may be `true` |
+| `failed` | A deterministic check rejected the value | always `false` |
+| `format_only` | Well-formed, but nothing confirmed it is *correct* | **always `false`** |
+
+**`format_only` never implies `verified`.** It is not a soft pass. Most identifiers on these
+documents carry no checksum — a CNIC's trailing digit is a gender marker, not a check digit, and
+NTN and STRN have none — so a format check can only prove a value is *malformed*, never that a
+well-formed value is the right one. `iban_checksum` is the only identifier gate that can verify.
+`format_only` is also what a gate returns when its field is absent.
+
+**Frontend: render `format_only` as unconfirmed, alongside `failed`, not alongside `passed`.**
+Treating it as a pass reintroduces exactly the failure the gates exist to prevent — see
+[`decisions/ADR-004-format-only-gate-state.md`](./decisions/ADR-004-format-only-gate-state.md).
+Field shapes remain defined by `EXTRACTION_SCHEMA.json` (now 0.2.0), which this file references
+rather than restates.
 
 ---
 

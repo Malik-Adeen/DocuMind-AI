@@ -96,7 +96,8 @@ it with a new one.
 
 - [[ADR-001-local-llm]] — Local Qwen2.5-7B instead of hosted GPT/Claude. Data residency + fixed cost on owned GPU.
 - [[ADR-002-two-stage-ocr]] — Two-stage OCR (PaddleOCR + Qaari). Single engine handles Urdu poorly.
-- [[ADR-003-deterministic-gates]] — Deterministic gates over model self-reported confidence. Model confidence is uncalibrated on numbers.
+- [[ADR-003-deterministic-gates]] — Deterministic gates over model self-reported confidence. Model confidence is uncalibrated on numbers. **Superseded by ADR-004.**
+- [[ADR-004-format-only-gate-state]] — Gate results are three-state (`passed` / `failed` / `format_only`); a format check can never verify. CNIC's trailing digit is a gender marker, not a checksum, so `cnic_digit_count` could never confirm a value. Supersedes ADR-003.
 
 ## 9. Session protocol (for AI coding assistants)
 

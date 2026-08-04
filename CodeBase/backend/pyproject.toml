@@ -42,10 +42,11 @@ python_version = "3.11"
 files = ["app"]
 strict = true
 warn_unreachable = true
+explicit_package_bases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+pythonpath = ["."]
 markers = [
     "unit: fast, no I/O",
     "integration: needs Postgres/Redis",

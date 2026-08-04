@@ -2,7 +2,7 @@
 status: active
 owner: Adeen
 last_reviewed: 2026-08-04
-version: 1.0.0
+version: 1.1.0
 ---
 
 # ARCHITECTURE.md
@@ -82,11 +82,37 @@ with overlapping-box fixtures.
 
 The gates (Stage 6) are ordinary deterministic code. No model involvement.
 
-- `iban_checksum` — mod-97.
-- `cnic_digit_count` — 13 digits, format check.
-- `arithmetic_reconciliation` — line items sum to subtotal; subtotal + tax = total; MRC/OTC consistent with terms.
-- `date_parse` — parses to a real date, and is not absurd (e.g. year 1900).
-- `currency_consistency` — one currency per document.
+**A gate returns three states, not two:** `passed`, `failed`, `format_only`.
+
+`format_only` exists because most identifiers on these documents have no checksum. A format check
+can prove a value is *malformed*; it can never prove a well-formed value is *correct*. Collapsing
+that into a boolean would let "looks like a CNIC" be recorded as "is the right CNIC", which is
+exactly the confidently-wrong failure this system exists to prevent.
+
+**A `format_only` result can never set `verified: true`.** Only a gate that can actually falsify a
+correct-looking value may verify one.
+
+| Gate | Result states | Can set `verified: true`? |
+|---|---|---|
+| `iban_checksum` — mod-97 | `passed` / `failed` | **Yes** |
+| `arithmetic_reconciliation` — line items sum to subtotal; subtotal + tax = total; MRC/OTC consistent with terms | `passed` / `failed` | Yes |
+| `date_parse` — parses to a real date, and is not absurd (e.g. year 1900) | `passed` / `failed` | Yes |
+| `line_item_sum` | `passed` / `failed` | Yes |
+| `currency_consistency` — one currency per document | `passed` / `failed` | Yes |
+| `cnic_format_check` — 13 digits, positional structure | `format_only` / `failed` | **No** |
+| `ntn_format_check` | `format_only` / `failed` | **No** |
+| `strn_format_check` | `format_only` / `failed` | **No** |
+
+**Absent fields return `format_only`, not `failed`.** A gate whose field is null or absent has
+nothing to check, and a document that genuinely has no IBAN is not a document with a broken one.
+The "Result states" column above lists the states reachable when the field is *present*; every
+gate can additionally return `format_only` when it is not. Only a present, well-formed,
+checksum-passing value returns `passed`.
+
+**`iban_checksum` is the only identifier gate that can verify.** CNIC carries no checksum — its
+last digit is a gender parity marker, not a check digit, so it constrains nothing about the
+preceding twelve. NTN and STRN have no checksum either. A CNIC, NTN or STRN that passes its format
+check is `format_only` and reaches the reviewer as unverified, always.
 
 A gate failure does **not** fail the document. It sets `verified: false` on the affected fields and
 routes to `needs_review`. Silent auto-correction is forbidden — it converts a visible problem into
@@ -115,6 +141,7 @@ Current extraction view = latest extraction + corrections applied on top. Never 
 | LLM emits invalid JSON | retry once with a repair prompt; then `EXTRACTION_FAILED`. Never regex-patch the JSON. |
 | LLM omits a required field | field is `null`, `confidence: 0` — not a crash. |
 | Gate fails | `needs_review`, affected fields `verified: false`. |
+| Gate returns `format_only` | Not a failure. Field stays `verified: false` and reaches the reviewer as unconfirmed. CNIC/NTN/STRN always land here (§5). |
 | GPU OOM | task retries with backoff; concurrency limit is the real fix. |
 | Worker dies mid-task | Celery re-queues; idempotency (INV-4) makes this safe. |
 

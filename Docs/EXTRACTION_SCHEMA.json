@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://internal/doc-intel/extraction-schema-0.1.0.json",
+  "$id": "https://internal/doc-intel/extraction-schema-0.2.0.json",
   "title": "ExtractionResult",
   "description": "The only shape an extraction result ever takes. LLM output, DB row, API response and Excel columns all derive from this. Field declaration order defines Excel column order.",
   "type": "object",
@@ -36,11 +36,11 @@
         "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "verified": {
           "type": "boolean",
-          "description": "True only if a deterministic gate confirmed it, or a human corrected it. Distinct from high confidence."
+          "description": "True only if a deterministic gate confirmed it, or a human corrected it. Distinct from high confidence. A gate whose result is format_only can never set this true — a format check cannot prove a well-formed value is the correct value."
         },
         "gate": {
           "type": ["string", "null"],
-          "description": "Which validator ran, e.g. iban_checksum, cnic_digit_count, arithmetic_reconciliation, date_parse, none"
+          "description": "Which validator ran, e.g. iban_checksum, cnic_format_check, arithmetic_reconciliation, date_parse, none"
         },
         "gate_error": { "type": ["string", "null"] },
         "source": { "$ref": "#/$defs/source" }
@@ -68,7 +68,7 @@
         "ocr_urdu": { "type": "string", "examples": ["qaari-0.1-urdu"] },
         "llm": { "type": "string", "examples": ["qwen2.5-7b-instruct"] },
         "prompt_hash": { "type": "string" },
-        "schema_version": { "type": "string", "const": "0.1.0" }
+        "schema_version": { "type": "string", "const": "0.2.0" }
       }
     },
     "status": { "enum": ["complete", "needs_review", "failed"] },
@@ -132,10 +132,14 @@
       "description": "Every deterministic validator that ran, and its verdict. Authoritative over the LLM (INV-5).",
       "items": {
         "type": "object",
-        "required": ["name", "passed"],
+        "required": ["name", "result"],
+        "additionalProperties": false,
         "properties": {
-          "name": { "enum": ["iban_checksum", "cnic_digit_count", "arithmetic_reconciliation", "date_parse", "currency_consistency", "line_item_sum"] },
-          "passed": { "type": "boolean" },
+          "name": { "enum": ["iban_checksum", "cnic_format_check", "ntn_format_check", "strn_format_check", "arithmetic_reconciliation", "date_parse", "currency_consistency", "line_item_sum"] },
+          "result": {
+            "enum": ["passed", "failed", "format_only"],
+            "description": "Three states, not two. format_only means the value is well-formed but nothing confirmed it is correct: the identifier carries no checksum. Only iban_checksum, arithmetic_reconciliation, date_parse, line_item_sum and currency_consistency can return passed. cnic_format_check, ntn_format_check and strn_format_check return format_only or failed, never passed."
+          },
           "detail": { "type": "string" },
           "affected_fields": { "type": "array", "items": { "type": "string" } }
         }

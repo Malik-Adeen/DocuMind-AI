@@ -2,7 +2,7 @@
 status: active
 owner: Adeen
 last_reviewed: 2026-08-04
-version: 1.0.0
+version: 1.1.0
 ---
 
 # INDEX.md — map of content
@@ -37,7 +37,8 @@ Summary list in [[PROJECT_CONTEXT]] §8.
 |---|---|---|---|
 | [[ADR-001-local-llm]] | Why a local Qwen2.5-7B rather than a hosted GPT/Claude API | Adeen | Considering an external model call, or wondering why extraction quality is capped |
 | [[ADR-002-two-stage-ocr]] | Why two OCR engines (PaddleOCR + Qaari) and what the merge costs | Adeen | Touching OCR, script detection, bounding boxes, or chasing corrupted text |
-| [[ADR-003-deterministic-gates]] | Why validators outrank model confidence, and why gates never auto-correct | Adeen | Writing a validator, handling `verified` vs `confidence`, or tempted to threshold on confidence |
+| [[ADR-003-deterministic-gates]] | Why validators outrank model confidence, and why gates never auto-correct — **superseded by ADR-004**, kept as record | Adeen | Only for history. Read ADR-004 instead |
+| [[ADR-004-format-only-gate-state]] | Why gate results are three-state, and why a format check (CNIC/NTN/STRN) can never set `verified: true` | Adeen | Writing any validator, deciding what `passed` is allowed to mean, or rendering gate results in the UI |
 
 ## Code
 
@@ -45,7 +46,7 @@ Summary list in [[PROJECT_CONTEXT]] §8.
 |---|---|---|---|
 | [`../CodeBase/CLAUDE.md`](../CodeBase/CLAUDE.md) | The working rule for code: required reading, and docs update in the same commit as the change | Adeen | Before the first commit in `CodeBase/` |
 | [`../CodeBase/backend/CLAUDE.md`](../CodeBase/backend/CLAUDE.md) | Backend implementation rules — layering, gates, money, Celery, prompts, pre-push checks | Adeen | Before writing backend code |
-| [`../.claude/`](../.claude/) | Shared Claude Code workspace config: permission allowlist (`settings.json`), the Stop hook that warns when code changed but `Docs/` did not (`hooks/docs_reminder.py`), and five slash commands — `/gate`, `/adr`, `/journal`, `/contract-change`, `/eval` (`commands/`) | Adeen | When a permission prompt is noisy, when the docs warning fires, or before adding a command |
+| [`../.claude/`](../.claude/) | Shared Claude Code workspace config: permission allowlist (`settings.json`) and five slash commands — `/gate`, `/adr`, `/journal`, `/contract-change`, `/eval` (`commands/`) | Adeen | When a permission prompt is noisy, or before adding a command |
 
 ---
 

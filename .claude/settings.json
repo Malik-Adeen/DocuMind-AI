@@ -16,26 +16,15 @@
       "Bash(tree *)",
       "Bash(ls *)"
     ],
-"deny": [
-  "Bash(git push *)",
-  "Bash(git reset --hard *)",
-  "Bash(rm -rf *)",
-  "Bash(rm -fr *)",
-  "Read(**/evals/golden/sealed/**)",
-  "Edit(**/evals/golden/sealed/**)"
-] 
-  },
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PROJECT_DIR}/.claude/hooks/docs_reminder.py",
-            "timeout": 15
-          }
-        ]
-      }
+    "deny": [
+      "Bash(git push *)",
+      "Bash(git reset --hard *)",
+      "Bash(rm -rf *)",
+      "Bash(rm -fr *)",
+      "Read(**/evals/golden/sealed/**)",
+      "Edit(**/evals/golden/sealed/**)",
+      "Read(**/evals/golden/**)",
+      "Edit(**/evals/golden/**)"
     ]
   }
 }

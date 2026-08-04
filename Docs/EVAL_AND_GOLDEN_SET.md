@@ -2,7 +2,7 @@
 status: active
 owner: Adeen
 last_reviewed: 2026-08-04
-version: 1.0.0
+version: 1.1.0
 ---
 
 # EVAL_AND_GOLDEN_SET.md
@@ -41,6 +41,14 @@ release. If you tune prompts against sealed, it is no longer an eval set — it 
 **Synthetic data caveat.** SynthDoG + Faker `ur_PK` generates volume, not truth. Synthetic docs
 are for training and smoke tests only. **Never report headline accuracy from synthetic data** —
 it shares generator biases with nothing in the real world.
+
+**Urdu OCR caveat.** Qaari-0.1-Urdu's reported **0.048 WER is a clean-text figure** — printed,
+well-scanned Urdu. It says nothing about the documents this system actually receives. **Urdu WER on
+degraded input is unmeasured:** skew, low-DPI scans, stamp and signature overlap, and handwritten
+annotation are exactly the ≥ 25% degraded slice of the golden set above, and no Urdu error rate has
+been measured on any of it. Do not quote 0.048 as this pipeline's Urdu accuracy, and do not assume
+Urdu field recall on degraded documents resembles the Latin path's. Measuring it is a prerequisite
+for any claim about Urdu support — until then it belongs in §6.
 
 ### Label format
 One JSON per document, matching `EXTRACTION_SCHEMA.json` `fields` block, values only:
@@ -88,7 +96,10 @@ A wrong field costs a wrong invoice.
 
 **Unit (many, fast)**
 - Each deterministic gate in isolation: IBAN checksum against known-valid and known-invalid,
-  CNIC digit count, arithmetic reconciliation with a deliberate 1-rupee mismatch.
+  CNIC/NTN/STRN format checks, arithmetic reconciliation with a deliberate 1-rupee mismatch.
+- **Format-only gates need a third test**, not two: well-formed → `format_only`, malformed →
+  `failed`, and an assertion that neither path ever sets `verified: true`. A format gate tested
+  only for pass/fail is the bug it is supposed to catch.
 - Schema validation: malformed LLM output is rejected, never partially accepted.
 - Money parsing: `45,000`, `45000.00`, `Rs. 45,000/-`, `4.5e4` → correct or rejected. Never silently coerced.
 
@@ -134,4 +145,5 @@ That exit code is the whole point — it is what makes "95% accurate" a fact ins
 
 Named honestly so nobody assumes coverage that does not exist:
 handwriting-only documents, rotated-90° pages, multi-document PDFs, non-Urdu/non-English text,
-adversarial uploads. Add each to the golden set before claiming support.
+adversarial uploads, **Urdu OCR accuracy on degraded scans** (see the Urdu OCR caveat in §2).
+Add each to the golden set before claiming support.

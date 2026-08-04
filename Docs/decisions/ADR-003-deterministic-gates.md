@@ -1,14 +1,22 @@
 ---
-status: accepted
+status: superseded
 owner: Adeen
 last_reviewed: 2026-08-04
-version: 1.0.0
+version: 1.1.0
 ---
 
 # ADR-003 — Deterministic gates are authoritative over model self-reported confidence
 
-**Status:** accepted · **Decided:** date not recorded; extracted from the decision log in [[PROJECT_CONTEXT]] §8 on 2026-08-04
+**Status:** superseded · **Decided:** date not recorded; extracted from the decision log in [[PROJECT_CONTEXT]] §8 on 2026-08-04
 **Supersedes:** —
+**Superseded by:** [[ADR-004-format-only-gate-state]] (2026-08-04)
+
+> **Superseded — read [[ADR-004-format-only-gate-state]] first.** The principle below still holds:
+> deterministic validators outrank model confidence. What is wrong is the gate list in *Decision*.
+> It names `cnic_digit_count` alongside `iban_checksum` as if both could confirm a value. CNIC has
+> no check digit — its trailing digit is a gender marker — so that gate can never verify. ADR-004
+> replaces the two-state verdict with `passed` / `failed` / `format_only`. The text below is left
+> exactly as decided; it is a record, not current guidance.
 
 ## Context
 
