@@ -14,8 +14,7 @@
       "Bash(git add *)",
       "Bash(git commit *)",
       "Bash(tree *)",
-      "Bash(ls *)",
-      "Bash(cat *)"
+      "Bash(ls *)"
     ],
 "deny": [
   "Bash(git push *)",
