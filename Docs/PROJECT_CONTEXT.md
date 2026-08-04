@@ -36,7 +36,7 @@ Design consequence: **we prefer flagging a field as unverified over guessing it.
 | OCR (Urdu) | Qaari-0.1-Urdu | second stage, Urdu regions |
 | LLM | Qwen2.5-7B-Instruct | **local**, self-hosted |
 | Compute | 1× L20, 48 GB GDDR6 | single node, no cluster |
-| Validation | deterministic gates | IBAN checksum, CNIC digit count, arithmetic reconciliation |
+| Validation | deterministic gates | IBAN mod-97 (the only verifying identifier gate), CNIC/NTN/STRN format checks, arithmetic reconciliation. Three-state results — see [[ADR-004-format-only-gate-state]] |
 | Synthetic data | SynthDoG + Faker `ur_PK` | training/eval corpus |
 
 **Explicitly NOT in scope right now:** Kubernetes, multi-tenant orgs, OAuth/SSO, MinIO/S3,
