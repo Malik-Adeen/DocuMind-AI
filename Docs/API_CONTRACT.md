@@ -10,6 +10,11 @@ version: 0.3.0
 **Version:** 0.3.0 · **Status:** Draft — freeze before frontend work starts
 **Owners:** backend (Adeen) + frontend (friend). Changes require both.
 
+> ✅ **Implemented.** Every endpoint below is now served by the real application
+> (`backend/app/main.py`, `uv run uvicorn app.main:app`), backed by Postgres. The mock in
+> `backend/tests/mock_server.py` is still shipped and still runs — both are exercised by the same
+> contract suite (§10).
+>
 > ⚠️ **Not agreed. The frontend dev has still not been told about 0.2.0 or 0.3.0.** Both are
 > breaking. 0.2.0 removed `gates[].passed`; 0.3.0 adds a **required** `data_classification` on
 > upload and adds `profile` to `pipeline_version`. §4's ground rule 4 says removing or renaming a
@@ -232,6 +237,15 @@ GET /api/v1/documents?status=&page=1&page_size=25&q=&from=&to=
   }
 ```
 
+**`needs_review_count` is defined (new in 0.3.0):** the number of fields in the *current view* of
+the document's latest extraction whose `verified` is `false`, **excluding fields a human has already
+corrected** — a corrected field is verified by definition. It is a count of fields, not of gates:
+one failing `arithmetic_reconciliation` touching three fields contributes three. Documents with no
+extraction yet count `0`.
+
+`from` and `to` filter on `uploaded_at` and are ISO-8601. `q` is a case-insensitive substring match
+on `filename`.
+
 ---
 
 ## 8. Error envelope
@@ -324,6 +338,13 @@ curl -F file=@scan.pdf -F data_classification=synthetic \
      -H "Authorization: Bearer mock-token-reviewer" \
      http://localhost:8000/api/v1/documents
 ```
+
+### Fixture parity
+
+The mock and the real application seed **the same three documents from the same source**:
+`backend/app/db/fixtures.py`. The mock imports it; `backend/app/db/seed.py` writes it into Postgres.
+Neither maintains its own copy, because two hand-kept copies of a fixture drift silently and the
+contract suite would then be comparing the mock against itself.
 
 ### Contract tests
 

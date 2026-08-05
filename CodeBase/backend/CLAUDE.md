@@ -48,6 +48,7 @@ backend/
 ```bash
 docker compose up -d                       # postgres 16, required by the app and integration tests
 uv run alembic upgrade head                # apply migrations
+uv run python -m app.db.seed               # 3 users + the 3 review-state documents
 uv run uvicorn app.main:app --reload      # dev server
 uv run celery -A app.workers worker -l info
 uv run pytest tests/unit -q                # fast, run constantly
