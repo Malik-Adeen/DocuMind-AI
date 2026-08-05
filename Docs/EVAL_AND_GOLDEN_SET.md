@@ -50,6 +50,29 @@ been measured on any of it. Do not quote 0.048 as this pipeline's Urdu accuracy,
 Urdu field recall on degraded documents resembles the Latin path's. Measuring it is a prerequisite
 for any claim about Urdu support — until then it belongs in §6.
 
+### Synthesised degradation ladder
+
+CORD and every other public receipt/invoice corpus we can use is **clean**, and we have no degraded
+Latin-script invoices at all. So the ≥ 25% degraded slice above cannot currently be filled, and
+"accuracy degrades on bad scans" is a claim with no number behind it.
+
+`backend/tools/degrade.py` synthesises a **6-step ladder from one clean image** — L0 is the
+original, L5 the worst realistic scan — applying skew, contrast loss, Gaussian blur, a downsample
+to 100–150 dpi, and JPEG artefacts, in that order. It is deterministic given a seed, so a CER curve
+is reproducible and a regression is attributable to the model rather than to the noise.
+
+**What it buys:** the shape of the curve — *where* accuracy breaks, not merely *that* it does.
+Running Stage 1 across L0…L5 gives a CER per level and identifies the step at which the Latin path
+stops being usable.
+
+**What it does not buy, and this is the same caveat as the synthetic-data one above:** a synthesised
+ladder measures the pipeline against *this ladder*, not against real scans. Photocopier banding,
+scanner streaks, stamp and signature overlap, handwritten annotation, and paper texture are not in
+it. **A CER curve from `degrade.py` is not a golden-set number and is not quotable as accuracy on
+degraded documents** — it is a diagnostic that tells you which degradation dimension to go and
+collect real examples of. Real degraded documents replace it; they are not optional because it
+exists.
+
 ### Label format
 One JSON per document, matching `EXTRACTION_SCHEMA.json` `fields` block, values only:
 

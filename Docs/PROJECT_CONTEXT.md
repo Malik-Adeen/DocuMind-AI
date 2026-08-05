@@ -34,14 +34,40 @@ Design consequence: **we prefer flagging a field as unverified over guessing it.
 |---|---|---|
 | OCR (Latin) | PaddleOCR PP-OCRv5 | primary text + layout |
 | OCR (Urdu) | Qaari-0.1-Urdu | second stage, Urdu regions |
-| LLM | Qwen2.5-7B-Instruct | **local**, self-hosted |
-| Compute | 1× L20, 48 GB GDDR6 | single node, no cluster |
+| LLM | Qwen2.5-7B-Instruct | local on `production`; **hosted API on `prototype`** — see below |
+| Compute | **`prototype`: RTX 3060 Ti, 8 GB.** `production`: 1× L20, 48 GB GDDR6 | single node, no cluster |
 | Validation | deterministic gates | IBAN mod-97 (the only verifying identifier gate), CNIC/NTN/STRN format checks, arithmetic reconciliation. Three-state results — see [[ADR-004-format-only-gate-state]] |
 | Synthetic data | SynthDoG + Faker `ur_PK` | training/eval corpus |
+| Image handling | Pillow | page size for bbox normalisation; the degradation ladder in `backend/tools/degrade.py` |
+
+`paddleocr` is an **optional dependency group**, not a default one — `uv sync --group ocr` installs
+it. It pulls PaddlePaddle, which nothing but Stage 1 needs, and the Stage 1 unit tests inject a fake
+engine rather than loading a model. Without the group installed, importing
+`app.pipeline.ocr.paddle` works and calling its loader does not.
+
+### Two deployment profiles
+
+**There is no L20 yet.** It is procured only if the project is approved. Until then everything runs
+on a local RTX 3060 Ti, which cannot hold a 7B model alongside two OCR models — so the prototype
+calls a hosted LLM API, and is therefore restricted to documents that carry no customer data.
+
+| | `prototype` — now | `production` — if approved |
+|---|---|---|
+| GPU | RTX 3060 Ti, 8 GB | L20, 48 GB |
+| PaddleOCR PP-OCRv5 | local | local |
+| Qaari-0.1-Urdu | local, 4-bit base if fp16 does not fit | local, fp16 |
+| Qwen2.5-7B-Instruct | hosted API | local (vLLM) |
+| **Documents permitted** | **public and synthetic only** | real PTCL documents |
+
+VRAM budgets are in [`ARCHITECTURE.md`](./ARCHITECTURE.md) §1. The data rule is **INV-6** in §6 and
+the reasoning is [[ADR-006-two-deployment-profiles]].
 
 **Explicitly NOT in scope right now:** Kubernetes, multi-tenant orgs, OAuth/SSO, MinIO/S3,
-hosted GPT/Claude API calls, mobile app, ERP connectors. If a doc or a code comment mentions
-these, it is out of date — delete it.
+mobile app, ERP connectors. If a doc or a code comment mentions these, it is out of date — delete it.
+
+**Hosted GPT/Claude API calls** were on that list and are now scoped rather than banned: permitted
+on the `prototype` profile for public and synthetic documents only, never for a real PTCL document,
+on any profile ([[ADR-006-two-deployment-profiles]], INV-6). [[ADR-001-local-llm]] is not reversed.
 
 ## 4. Team split
 
@@ -78,6 +104,17 @@ These are the rules that, if broken, make the product worthless. Guard them in c
   extraction row, never an overwrite. Audit trail is append-only.
 - **INV-5** Deterministic validators are authoritative over the LLM. If the checksum says the IBAN
   is invalid, the IBAN is invalid — regardless of model confidence.
+- **INV-6** **A real PTCL document never reaches a hosted API.** Every document **record** carries a
+  `data_classification` of `public`, `synthetic` or `restricted`; only the first two may be sent to
+  a hosted endpoint, on any profile, ever. It is **set at upload and immutable afterwards**, like
+  the raw file under INV-3 — reclassification is a new document record with a new `document_id`,
+  never an `UPDATE`. Default is `restricted`, and an absent or unrecognised value is `restricted`.
+  Enforced by a guard in `backend/app/pipeline/llm/client.py` that reads the classification **off
+  the record** and raises before the request is made; it is not a call argument, because an
+  invariant that depends on every caller passing the right value is not an invariant
+  ([[ADR-007-classification-on-the-document-record]]). Unlike INV-1 … INV-5 this one cannot be
+  caught after the fact: nothing fails, no gate trips, and the data is already gone
+  ([[ADR-006-two-deployment-profiles]]).
 
 ## 7. Open questions
 
@@ -87,6 +124,11 @@ Keep this list short and honest. Move items to a decision below once resolved.
 - [ ] Human review: is correction mandatory below a confidence threshold, or advisory?
 - [ ] Retention: how long do we keep raw uploads?
 - [ ] Multi-page documents: one extraction per file, or per logical document?
+- [ ] **Is there any deterministic relationship between `mrc`/`otc` and the totals?** No rule is
+      known to hold across invoices, contracts and multi-month billing, so the sub-check is
+      `format_only` and these two fields have no deterministic backstop ([[ADR-005-mrc-otc-relationship-unspecified]]).
+      Answering it needs real PTCL documents in the golden set, and probably a `months` field
+      read from `billing_terms`.
 
 ## 8. Decision log
 
@@ -98,6 +140,9 @@ it with a new one.
 - [[ADR-002-two-stage-ocr]] — Two-stage OCR (PaddleOCR + Qaari). Single engine handles Urdu poorly.
 - [[ADR-003-deterministic-gates]] — Deterministic gates over model self-reported confidence. Model confidence is uncalibrated on numbers. **Superseded by ADR-004.**
 - [[ADR-004-format-only-gate-state]] — Gate results are three-state (`passed` / `failed` / `format_only`); a format check can never verify. CNIC's trailing digit is a gender marker, not a checksum, so `cnic_digit_count` could never confirm a value. Supersedes ADR-003.
+- [[ADR-005-mrc-otc-relationship-unspecified]] — `mrc + otc == subtotal` was assumed, not specified, and is false for multi-month billing and for contracts with no total. The sub-check is `format_only` until verified against real documents.
+- [[ADR-006-two-deployment-profiles]] — `prototype` (RTX 3060 Ti, hosted LLM, public/synthetic documents only) and `production` (L20, all local, real documents). INV-6: a real PTCL document never reaches a hosted API. Scopes [[ADR-001-local-llm]] rather than reversing it.
+- [[ADR-007-classification-on-the-document-record]] — `data_classification` is persisted on the document record, set at upload and immutable, not passed per call. Third value renamed `customer` → `restricted`; reclassification is a new document. Amends INV-6's wording in ADR-006.
 
 ## 9. Session protocol (for AI coding assistants)
 
@@ -112,4 +157,6 @@ decisive command output.**
 - **OTC** — One-Time Charge.
 - **Gate** — a deterministic validator that can fail an extraction without the LLM's involvement.
 - **Golden set** — hand-labelled documents used to measure accuracy. See `EVAL_AND_GOLDEN_SET.md`.
-- **Pipeline version** — the tuple of (OCR versions, model, prompt hash). Stamped on every extraction.
+- **Pipeline version** — the tuple of (profile, OCR versions, model, prompt hash). Stamped on every
+  extraction. Two extractions are comparable only if all of it matches — `profile` included, since
+  `prototype` and `production` do not run the same LLM.

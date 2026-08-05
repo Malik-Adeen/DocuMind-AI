@@ -28,6 +28,213 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-05 — first real pipeline stage: PaddleOCR wrapper and a synthesised degradation ladder
+
+**Touched:** INV-2 · `backend/app/pipeline/ocr/paddle.py` (new), `backend/tools/degrade.py` (new),
+`backend/tests/unit/test_degrade.py` (new), `backend/tests/unit/test_paddle_ocr.py` (new),
+`backend/pyproject.toml`, `backend/CLAUDE.md`, `Docs/ARCHITECTURE.md` §2 §4,
+`Docs/PROJECT_CONTEXT.md` §3, `Docs/EVAL_AND_GOLDEN_SET`.md §2
+
+Second entry today. The session was gated into two reviewable halves; the first is below.
+
+**Did:** `paddle.py` wraps PP-OCRv5 and returns `TextRegion`s — text, per-region confidence, bbox
+normalised to 0..1 in the shape of the schema's `source` object. No merge logic: Qaari and the merge
+are separate stages. The loader is lazy and injectable, so 22 unit tests run with a fake engine and
+need neither the model nor a GPU. `paddleocr` is an optional dependency group (`uv sync --group
+ocr`) rather than a default dependency; Pillow is a real one, for page size.
+
+`degrade.py` synthesises a 6-step ladder (L0 original .. L5 worst realistic scan): skew, contrast
+loss, Gaussian blur, downsample to 100–150 dpi, JPEG artefacts, in scan order. Deterministic per
+seed, jittered per level so one seed gives one reproducible sample and different seeds give
+different ones. CLI writes PNGs so no *further* JPEG loss is added on top of the modelled loss.
+CORD is clean and we have no degraded Latin invoices, so this is what makes the ≥ 25% degraded slice
+measurable at all.
+
+No CORD download, no OCR run — as instructed. 153 unit tests, 61 contract tests.
+
+**Learned / broke:** three things, two of them found by tests failing.
+
+**Edge sharpness is not monotonic across the ladder, and the reason matters.** L1 measured *higher*
+edge energy than L0 (67.2 vs 64.9). JPEG ringing around sharp black-on-white edges adds
+high-frequency detail, so at low degradation the artefacts add edge energy faster than blur removes
+it. Monotone loss only takes over from L2. This is exactly the shape of trap that would make a CER
+curve get misread later — "L1 scored better than L0, the ladder is broken" — so it is now two named
+tests rather than a footnote: one asserting the fall from L2 down, one asserting the non-monotonic
+top so that if it ever *becomes* monotone somebody has to decide that deliberately.
+
+**The jitter bands were wider than the gaps between levels.** ±25% on skew makes L4 (1.8° ± 0.45)
+overlap L5 (2.5° ± 0.63), so a seed could produce a level 5 less skewed than its level 4 — a ladder
+whose rungs cross. Caught by the monotonicity test on seed 0. The bands are now bounded by the
+tightest adjacent pair: skew ±15%, blur ±10%, contrast ±2%, quality ±4. A "deterministic given a
+seed" ladder is not the same claim as "ordered by severity", and only the second one is useful.
+
+Third: PNG stores resolution as pixels-per-metre, so a 110 dpi write reads back as 110.0074. Only a
+test assertion, but it is the same class of thing as money-in-float — a unit conversion that looks
+lossless and is not.
+
+**Next:** `paddle.py` has never been run against a real image or a real model — every test injects a
+fake engine, so the wrapper is verified against *the documented* PP-OCRv5 output shape, not the
+actual one. `rec_polys` / `rec_scores` / `rec_boxes` handling is the part most likely to be wrong,
+and it will show up as either an exception or an empty region list on first contact. Adeen is
+running it against real images and reporting CER; that run is the first real evidence any of this
+works. `evals/run_eval.py` does not exist yet, so the CER numbers from that run are **not quotable**
+under §1 of [[EVAL_AND_GOLDEN_SET]] — they are a diagnostic, and the harness is what makes them a
+measurement.
+
+## 2026-08-05 — classification moved onto the document record; profile stamped in `pipeline_version`
+
+**Touched:** INV-6, INV-3, INV-4 · `Docs/decisions/ADR-007-classification-on-the-document-record.md`
+(new), `Docs/EXTRACTION_SCHEMA.json` (0.2.0 → 0.3.0), `Docs/API_CONTRACT.md` (0.2.0 → 0.3.0),
+`Docs/PROJECT_CONTEXT.md` §6 §8 §10, `Docs/ARCHITECTURE.md` §1 §6 §7, `Docs/INDEX.md`,
+`Docs/decisions/ADR-006-two-deployment-profiles.md` (amendment banner only),
+`backend/app/db/documents.py` (new), `backend/app/pipeline/llm/client.py`,
+`backend/tests/unit/test_document_record.py` (new), `backend/tests/unit/test_llm_guard.py`,
+`backend/tests/mock_server.py`, `backend/tests/contract/test_api_contract.py`
+
+**Did:** `data_classification` is no longer an argument to `LLMClient.complete`. It is a field on a
+frozen `DocumentRecord`, set at upload, immutable after, defaulting to `restricted`; the guard reads
+it off the record. The argument is **removed, not kept as an override** — an override is the same
+defect with a better name. `reclassify()` returns a new record with a new `document_id` and refuses
+to reuse the old one. Third enum value renamed `customer` → `restricted` (ADR-007 argues the rename:
+`restricted` names the handling rule, which is the thing a *default* can honestly say; `customer`
+names a belief about contents, which a default cannot).
+
+Upload now **requires** `data_classification` — the choice is named in API_CONTRACT §2 rather than
+left implied. Both required-and-rejected and optional-with-a-default are default-deny, so it is not
+a safety difference; it is about where the human decision gets recorded. A default makes an uploader
+that never sends the field indistinguishable, in the table, from documents someone actually
+classified. Two new error codes: `INVALID_CLASSIFICATION` and `IMMUTABLE_FIELD`.
+
+`pipeline_version` gains a required `profile`. Schema to 0.3.0, mock fixtures and contract tests
+follow. 128 tests pass.
+
+**Learned / broke:** the previous session shipped a guard that fails closed on a *malformed*
+classification and called INV-6 enforced. It was not. Default-deny catches the typo and the missing
+value; it cannot catch a caller that confidently passes `"synthetic"` for a real invoice, and every
+call site was free to pass whatever it liked. The guard was load-bearing on the assumption that the
+argument arriving at it was correct — which is the assumption the guard existed to remove. This is
+the fourth time in this repo the same shape has appeared: a mechanism that checks *form* being read
+as a mechanism that checks *truth* (`cnic_digit_count`, boolean `gates[].passed`, the invented
+mrc/otc identity, now a validated argument standing in for a recorded decision).
+
+The tell was in the code's own shape and nobody looked at it: a function whose correctness depends
+on its caller has moved the problem, not solved it. Persisting the value does not make it *true* —
+a human can still classify a real invoice as synthetic at upload — but it makes the decision
+singular, attributable, and immutable, instead of re-made silently on every call.
+
+`ARCHITECTURE` §6 now carries the `NOT NULL DEFAULT 'restricted'` / no-`UPDATE` requirement for the
+`documents` column, because there is no DB layer yet — `app/db/` has no models, session or
+migrations — and this record is a frozen dataclass standing in for a table that does not exist. That
+is a gap worth naming rather than a design: the immutability is currently Python-level only.
+
+**Next — still the blocking one, and it is now two versions deep.** **The frontend dev has still not
+been told about 0.2.0 or 0.3.0.** Neither has been agreed by both owners, which §4 ground rule 4
+requires and which was already outstanding when 0.2.0 shipped. What he needs, in order:
+
+1. **0.2.0:** `gates[].passed` is gone; `gates[].result` is three-state; `format_only` renders as
+   unconfirmed, grouped with `failed`, never with `passed`.
+2. **0.3.0, upload:** `data_classification` is a **required** form field with three values. It is a
+   control the user fills in — hard-coding `"synthetic"` in the upload helper makes the form submit
+   and defeats INV-6 the first time a real document goes through.
+3. **0.3.0, results:** `pipeline_version.profile` is required and is part of a run's identity;
+   `schema_version` is `"0.3.0"`.
+
+A banner saying so is now at the top of `API_CONTRACT.md`; it comes off when he has read both and
+agreed, not when the code is written.
+
+## 2026-08-04 — ADR-006: two profiles, and INV-6 enforced in code
+
+**Touched:** INV-6 (new) · `Docs/decisions/ADR-006-two-deployment-profiles.md` (new),
+`Docs/PROJECT_CONTEXT.md` §3 §6 §8, `Docs/ARCHITECTURE.md` §1 §2 §7, `Docs/INDEX.md`,
+`backend/app/pipeline/llm/client.py` (new), `backend/tests/unit/test_llm_guard.py` (new)
+
+**Did:** recorded that there is no L20. `prototype` runs on an RTX 3060 Ti with both OCR models
+local and the LLM hosted; `production` is the L20 with all three local. Added INV-6 — a real PTCL
+document never reaches a hosted API — and enforced it: `assert_releasable` raises
+`HostedEndpointRefusedError` before the transport is invoked, default deny, so an absent or
+misspelled classification is refused rather than allowed. `LLMClient` also refuses to *construct*
+with `profile=production, endpoint=hosted`. 26 guard tests.
+
+Docs no longer claim hardware we do not have. `ARCHITECTURE.md` §1 carries a VRAM budget for both
+cards, explicitly labelled estimates rather than measurements. Removed three `.gitkeep` files from
+directories that now hold real code; the two under `evals/golden/` stay, since those directories
+are still empty and gitignored.
+
+**Learned / broke:** INV-6 is not like the other five. INV-1 through INV-5 are all *detectable
+after the fact* — a wrong number in Excel can be traced, an overwritten row shows in the audit
+trail, a bad IBAN fails its checksum on the next run. A customer CNIC sent to a hosted API produces
+no error, no failing test, and no log entry that says anything went wrong. There is no "after the
+fact" in which to catch it, which is why it is the one invariant that had to be a guard rather than
+a rule, and why the guard fails closed on unrecognised input rather than falling through.
+
+The realistic failure was never someone deciding to send customer data. It is someone testing the
+prototype with one real invoice to see whether it works, which is the obvious thing to do and takes
+one drag-and-drop.
+
+Also worth recording: the docs asserted an L20 that never existed, and every capacity statement
+built on it read as fact. The VRAM table replacing it is honest about being estimates — but it is
+the same class of claim, and it should be measured before anything is decided on it.
+
+**Next:** the profile is not yet recorded in `pipeline_version`, so two extractions of the same
+document under different profiles would compare as if equivalent — that is an
+`EXTRACTION_SCHEMA.json` change and therefore an `API_CONTRACT.md` bump, not done here.
+`data_classification` currently lives only as an argument to the LLM client; it is not persisted on
+the document record, so nothing yet stops a document being reclassified between runs. Both need
+deciding before the prototype ingests anything.
+
+## 2026-08-04 — invented MRC/OTC rule removed (ADR-005); mock server and contract tests land
+
+**Touched:** INV-1 · `backend/app/pipeline/gates/arithmetic.py`,
+`backend/tests/unit/test_arithmetic_gate.py`, `backend/tests/mock_server.py` (new),
+`backend/tests/contract/` (new), `Docs/decisions/ADR-005-mrc-otc-relationship-unspecified.md` (new),
+`Docs/ARCHITECTURE.md` §5, `Docs/API_CONTRACT.md` §9, `Docs/PROJECT_CONTEXT.md` §7 and §8,
+`Docs/INDEX.md`, `backend/pyproject.toml`
+
+**Did:** the mrc/otc sub-check no longer asserts `mrc + otc == subtotal`. It returns `format_only`
+for any well-formed value and `failed` only for a malformed amount. ADR-005 records why. Added the
+credit-note failure cases that were missing — a wrong negative total, a wrong negative line-item
+sum, and a sign error — so negatives are tested in both directions, not just the passing one.
+
+Mock server implements all nine endpoints of API_CONTRACT 0.2.0 with three fixture documents, one
+per review state. 60 tests: 39 unit, 21 contract. Contract tests validate against
+`EXTRACTION_SCHEMA.json` with a real JSON-Schema validator, plus a test that the validator rejects
+known-bad payloads — otherwise a validator that accepts everything also produces a green run.
+
+**Learned / broke:** the rule was written from the field names alone. `mrc` and `otc` sit next to
+`subtotal` in the schema, so `mrc + otc == subtotal` looked like arithmetic. It is a claim about how
+one company bills, and it is false for multi-month invoices, for contracts with no total, and for
+any pro-rated period. Three months at 20,000 plus a 5,000 connection fee is a correct document that
+the rule reported as broken.
+
+The dangerous direction was the other one. `arithmetic_reconciliation` can set `verified: true`, so
+whenever a document satisfied the invented identity by coincidence, a wrong number would have been
+marked confirmed. This is the third time the same failure has appeared in this repo — a claim about
+*shape* recorded as a claim about *correctness* — after `cnic_digit_count` and the boolean
+`gates[].passed`. The first two were in the schema. This one was in code, which is worse, because no
+document review catches it.
+
+It also survived one round of self-review: I flagged the assumption in a draft report that was never
+sent, and treated that as having raised it. A caveat that only exists in an unsent message is not a
+caveat. The tolerance question in the same task was correctly escalated *before* implementing; the
+business rule was not, and they are the same category of decision.
+
+**Next:** `ARCHITECTURE.md` §5 now carries an explicit warning against reinstating the rule, since
+"can fail but never pass" reads as an unfinished gate. `jsonschema` was added as a dev dependency —
+not recorded in `PROJECT_CONTEXT.md` §3, which describes product stack rather than test tooling;
+say if it should be. The frontend dev still has not been told about 0.2.0.
+
+## 2026-08-04 — arithmetic reconciliation gate implemented and verified
+
+**Touched:** INV-1 · `backend/app/pipeline/gates/arithmetic.py`, `backend/tests/unit/test_arithmetic_gate.py`, `Docs/JOURNAL.md`
+
+**Did:** Verified and completed the arithmetic reconciliation gate (`check_arithmetic`) and its unit tests. Renamed exception class `_MalformedAmount` to `_MalformedAmountError` to comply with Ruff N818 rule. Formatted files and ran pre-push checks (`ruff check`, `ruff format --check`, `pytest`).
+
+**Learned / broke:** `ruff check` flagged rule N818 (`_MalformedAmount` exception naming). All 34 tests passed with exact Decimal arithmetic throughout (no float, no arbitrary tolerances), missing operands mapped strictly to `FORMAT_ONLY`, and failure reporting per-check with exact field attribution (`affected_fields`).
+
+**Next:** None.
+
+---
+
 ## 2026-08-04 — ADR-004 supersedes ADR-003; API_CONTRACT 0.2.0; toolchain fixed
 
 **Touched:** INV-1, INV-5 · `Docs/decisions/ADR-004-format-only-gate-state.md` (new),

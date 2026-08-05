@@ -17,6 +17,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "httpx>=0.28",
     "openpyxl>=3.1",
+    "pillow>=11.0",
 ]
 
 [dependency-groups]
@@ -25,6 +26,10 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "jsonschema>=4.23",
+]
+ocr = [
+    "paddleocr>=3.0",
 ]
 
 [tool.uv]
@@ -43,6 +48,10 @@ files = ["app"]
 strict = true
 warn_unreachable = true
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["paddleocr.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

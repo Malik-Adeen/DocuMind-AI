@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://internal/doc-intel/extraction-schema-0.2.0.json",
+  "$id": "https://internal/doc-intel/extraction-schema-0.3.0.json",
   "title": "ExtractionResult",
   "description": "The only shape an extraction result ever takes. LLM output, DB row, API response and Excel columns all derive from this. Field declaration order defines Excel column order.",
   "type": "object",
@@ -61,14 +61,18 @@
     "extraction_id": { "type": "string", "format": "uuid" },
     "pipeline_version": {
       "type": "object",
-      "description": "Stamped on every extraction. Two results are only comparable if these match.",
-      "required": ["ocr_latin", "ocr_urdu", "llm", "prompt_hash"],
+      "description": "Stamped on every extraction. Two results are only comparable if these match — including profile, because the same document extracted on prototype and on production went through different models on different hardware.",
+      "required": ["profile", "ocr_latin", "ocr_urdu", "llm", "prompt_hash"],
       "properties": {
+        "profile": {
+          "enum": ["prototype", "production"],
+          "description": "Deployment profile the extraction ran under. prototype uses a hosted LLM and is restricted to public/synthetic documents; production is all-local. Without this field two extractions of the same document under the two profiles compare as equivalent, which they are not (INV-6, ADR-006)."
+        },
         "ocr_latin": { "type": "string", "examples": ["paddleocr-pp-ocrv5"] },
         "ocr_urdu": { "type": "string", "examples": ["qaari-0.1-urdu"] },
         "llm": { "type": "string", "examples": ["qwen2.5-7b-instruct"] },
         "prompt_hash": { "type": "string" },
-        "schema_version": { "type": "string", "const": "0.2.0" }
+        "schema_version": { "type": "string", "const": "0.3.0" }
       }
     },
     "status": { "enum": ["complete", "needs_review", "failed"] },

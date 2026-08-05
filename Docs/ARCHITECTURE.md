@@ -14,12 +14,61 @@ Aspirational infrastructure lives in `PROJECT_CONTEXT.md` §3 under "not in scop
 
 ## 1. Constraints that shape everything
 
-- **One L20, 48 GB.** OCR models and Qwen2.5-7B share it. Throughput is bounded by GPU, not CPU or IO.
+- **One GPU, and right now it is the small one.** There is no L20 yet — see the two profiles below.
+  Throughput is bounded by GPU, not CPU or IO, on either card.
 - **Single tenant, internal users.** No org isolation, no per-tenant quotas.
 - **Correctness > latency.** A 90-second document that is right beats a 10-second document that is wrong.
 
 Consequence: the design is a **queue with a serialised GPU stage**, not a scale-out service.
 Everything else exists to keep that stage fed and to check its output.
+
+### Two profiles
+
+| | `prototype` — now | `production` — if approved |
+|---|---|---|
+| GPU | RTX 3060 Ti, 8 GB GDDR6 | L20, 48 GB GDDR6 |
+| PaddleOCR PP-OCRv5 | local | local |
+| Qaari-0.1-Urdu | local, 4-bit base if fp16 does not fit | local, fp16 |
+| Qwen2.5-7B-Instruct | **hosted API** | local, vLLM |
+| Documents permitted | **public and synthetic only** | real PTCL documents |
+
+**INV-6: a real PTCL document never reaches a hosted API.** That is the reason the profiles exist;
+the hardware difference is the consequence. Enforced in `app/pipeline/llm/client.py`, not by
+convention — the guard reads `data_classification` off the document record, where it was set at
+upload and cannot be changed ([[ADR-007-classification-on-the-document-record]]). See
+[[ADR-006-two-deployment-profiles]].
+
+**The profile is stamped on every extraction.** `pipeline_version.profile` is required in
+[[EXTRACTION_SCHEMA.json]] as of 0.3.0. Without it, the same document extracted on `prototype` and
+on `production` produces two `pipeline_version` values that compare as equal while having gone
+through a different LLM on different hardware — so a prototype number would silently satisfy a
+production release gate, and INV-4's "idempotent per (document, pipeline_version)" would treat two
+genuinely different runs as one. ADR-006 listed this as a consequence to be handled; this is it.
+
+### VRAM budget
+
+**These are estimates, not measurements.** Nothing here has been profiled on either card. They are
+planning figures for deciding what can be resident at once, and every one of them should be
+replaced with a measured number before it is relied on — the same rule
+[[EVAL_AND_GOLDEN_SET]] applies to accuracy applies to capacity.
+
+| Resident component | `prototype` (8 GB) | `production` (48 GB) |
+|---|---|---|
+| PaddleOCR PP-OCRv5 det + rec | ~1 GB | ~1 GB |
+| Qaari-0.1-Urdu | ~2 GB at 4-bit | ~5 GB at fp16 |
+| Qwen2.5-7B-Instruct weights | — (hosted) | ~15 GB at fp16 |
+| KV cache + activations, single document | ~1 GB | ~4 GB at the concurrency limit |
+| CUDA context, fragmentation, headroom | ~1 GB | ~2 GB |
+| **Estimated total resident** | **~5 GB of 8** | **~27 GB of 48** |
+
+The prototype's headroom is thin and the 4-bit Qaari is what buys it. **If Qaari fp16 fits, use
+it** — 4-bit is a quality regression of unknown size on a model whose degraded-Urdu accuracy is
+already unmeasured ([[EVAL_AND_GOLDEN_SET]] §2), so it is a cost to pay only when forced. Measure
+before choosing.
+
+The production column has room for a second concurrent document; whether that is *useful* is the
+open concurrency question in [[PROJECT_CONTEXT]] §7, and it is answered by the load test in
+[[EVAL_AND_GOLDEN_SET]] §4, not by this table.
 
 ---
 
@@ -36,9 +85,15 @@ FastAPI  ──────────►  PostgreSQL   (documents, extractions
 Redis ──► Celery worker ────┘
               │
               ├─ Stage 1  PaddleOCR PP-OCRv5      → text + layout boxes
+              │             app/pipeline/ocr/paddle.py — model load is lazy
+              │             and injectable; regions carry normalised 0..1
+              │             bboxes + per-region confidence (INV-2)
               ├─ Stage 2  Qaari-0.1-Urdu          → Urdu regions only
               ├─ Stage 3  text assembly + cleanup
               ├─ Stage 4  Qwen2.5-7B-Instruct     → JSON per EXTRACTION_SCHEMA
+              │             production: local vLLM
+              │             prototype:  hosted API — INV-6 guard refuses
+              │                         anything not public/synthetic
               ├─ Stage 5  schema validation       → reject malformed, no partial accept
               ├─ Stage 6  deterministic gates     → IBAN / CNIC / arithmetic
               └─ Stage 7  persist + route         → complete | needs_review
@@ -76,6 +131,15 @@ are re-read by Qaari. Results are merged by bounding box, Qaari winning on overl
 dropped text at region boundaries. That merge is a known sharp edge — it needs its own unit tests
 with overlapping-box fixtures.
 
+**Stage 1 is `app/pipeline/ocr/paddle.py`.** It wraps PP-OCRv5 and nothing else: it returns
+`TextRegion`s carrying text, per-region confidence, and a bbox normalised to 0..1 in the shape of
+the `source` object in [[EXTRACTION_SCHEMA.json]]. **There is no merge logic in it** — Qaari and the
+merge are separate stages, and putting either inside the Latin reader is what makes a merge bug
+untestable. Model loading is lazy and the loader is injectable, so the unit tests need neither the
+model nor a GPU; a mismatch between the engine's texts, scores and polygons raises rather than
+truncating, because a silently dropped region is a field that reaches the reviewer with no
+provenance (INV-2).
+
 ---
 
 ## 5. Validation as a separate stage
@@ -95,13 +159,30 @@ correct-looking value may verify one.
 | Gate | Result states | Can set `verified: true`? |
 |---|---|---|
 | `iban_checksum` — mod-97 | `passed` / `failed` | **Yes** |
-| `arithmetic_reconciliation` — line items sum to subtotal; subtotal + tax = total; MRC/OTC consistent with terms | `passed` / `failed` | Yes |
+| `arithmetic_reconciliation` — `subtotal + tax = total` | `passed` / `failed` | Yes |
+| `arithmetic_reconciliation` — mrc/otc reconciliation | `format_only` / `failed` | **No** — see below |
 | `date_parse` — parses to a real date, and is not absurd (e.g. year 1900) | `passed` / `failed` | Yes |
 | `line_item_sum` | `passed` / `failed` | Yes |
 | `currency_consistency` — one currency per document | `passed` / `failed` | Yes |
 | `cnic_format_check` — 13 digits, positional structure | `format_only` / `failed` | **No** |
 | `ntn_format_check` | `format_only` / `failed` | **No** |
 | `strn_format_check` | `format_only` / `failed` | **No** |
+
+**The mrc/otc sub-check can fail but can never pass, and that asymmetry is deliberate.** It is the
+only entry in the table with that shape, so it looks like a bug and will invite someone to "finish"
+it. It is finished.
+
+A malformed `mrc` or `otc` — a value that is not a decimal amount — is a **data defect**, and the
+sub-check returns `failed` for it. But there is **no known arithmetic relationship** between
+`mrc`/`otc` and the totals: an invoice may bill `otc` plus one month of `mrc`, a contract may state
+`mrc` with no total at all, and multi-month billing satisfies neither. So there is nothing the
+sub-check can confirm, and it returns `format_only` for every well-formed value.
+
+`mrc + otc == subtotal` was written into this gate once, on inference from the field names, and
+removed. **Do not reinstate it without real documents.** `arithmetic_reconciliation` is a verifying
+gate, so a wrong rule inside it does not merely produce false failures — it marks a wrong number
+`verified: true` whenever a document satisfies the invented identity by coincidence. See
+[[ADR-005-mrc-otc-relationship-unspecified]] and the open question in [[PROJECT_CONTEXT]] §7.
 
 **Absent fields return `format_only`, not `failed`.** A gate whose field is null or absent has
 nothing to check, and a document that genuinely has no IBAN is not a document with a broken one.
@@ -122,7 +203,8 @@ an invisible one.
 
 ## 6. Data model (shape, not DDL)
 
-- `documents` — file metadata, current status. Raw file immutable (INV-3).
+- `documents` — file metadata, current status, `data_classification`. Raw file immutable (INV-3),
+  and so is the classification: it is set at upload and never updated.
 - `extractions` — one row per pipeline run, stamped with `pipeline_version`. Append-only (INV-4).
 - `corrections` — one row per human edit, referencing extraction + field. Append-only.
 - `exports` — export jobs and their artifacts.
@@ -130,6 +212,14 @@ an invisible one.
 - `audit_log` — who did what, when.
 
 Current extraction view = latest extraction + corrections applied on top. Never destructive.
+
+**`documents.data_classification`** is `public | synthetic | restricted`, `NOT NULL DEFAULT
+'restricted'`, and has **no `UPDATE` path** — reclassifying a document inserts a new `documents` row
+with a new `document_id` and re-extracts against it. It is the one column on `documents` whose
+wrongness has no detector (INV-6), so it gets extraction-table treatment rather than metadata
+treatment. The table does not exist yet: `app/db/` has no models or migrations, and the record
+currently lives as a frozen `DocumentRecord` in `app/db/documents.py`. The first migration must
+carry the constraint above. See [[ADR-007-classification-on-the-document-record]].
 
 ---
 
@@ -144,6 +234,9 @@ Current extraction view = latest extraction + corrections applied on top. Never 
 | Gate returns `format_only` | Not a failure. Field stays `verified: false` and reaches the reviewer as unconfirmed. CNIC/NTN/STRN always land here (§5). |
 | GPU OOM | task retries with backoff; concurrency limit is the real fix. |
 | Worker dies mid-task | Celery re-queues; idempotency (INV-4) makes this safe. |
+| Restricted document reaches a hosted endpoint | Cannot. `HostedEndpointRefusedError` raises before the transport is invoked (INV-6). The task fails; no request is made. The guard reads the classification off the document record — it is not a call argument, so a caller cannot get it wrong. |
+| Document has no `data_classification` | Refused on the `prototype` profile — default deny. An unclassified record is `restricted`. The upload endpoint rejects it earlier still, with `422 INVALID_CLASSIFICATION`. |
+| Someone tries to reclassify a document | Rejected. The record is immutable and `PATCH .../extraction` returns `422 IMMUTABLE_FIELD`. Reclassification is a new upload ([[ADR-007-classification-on-the-document-record]]). |
 
 ---
 

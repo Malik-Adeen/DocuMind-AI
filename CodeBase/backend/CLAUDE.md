@@ -26,6 +26,7 @@ backend/
 │   └── export/          # xlsx, csv, json
 ├── tests/
 │   ├── unit/  integration/  contract/  fixtures/
+├── tools/               # developer scripts, not shipped, not under mypy
 └── evals/               # see ../../Docs/EVAL_AND_GOLDEN_SET.md
 ```
 
@@ -51,6 +52,8 @@ uv run pytest tests/unit -q                # fast, run constantly
 uv run pytest tests/contract -q            # must pass before any push
 uv run alembic revision --autogenerate -m ""
 uv run python evals/run_eval.py            # nightly; exits non-zero on gate failure
+uv sync --group ocr                        # installs paddleocr; not in the default sync
+uv run python tools/degrade.py IN OUT --seed 0   # 6-step degradation ladder from a clean image
 ```
 
 ## Before pushing
