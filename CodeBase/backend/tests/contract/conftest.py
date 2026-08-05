@@ -1,17 +1,54 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+import sqlalchemy
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jsonschema import Draft202012Validator
+from sqlalchemy import text
 
 from tests import mock_server
 
-SCHEMA_PATH = pathlib.Path(__file__).resolve().parents[4] / "Docs" / "EXTRACTION_SCHEMA.json"
+BACKEND = pathlib.Path(__file__).resolve().parents[2]
+SCHEMA_PATH = BACKEND.parent.parent / "Docs" / "EXTRACTION_SCHEMA.json"
+
+ADMIN_URL = os.environ.get(
+    "PTCL_ADMIN_DATABASE_URL", "postgresql+psycopg://ptcl:ptcl@localhost:5432/postgres"
+)
+CONTRACT_URL = os.environ.get(
+    "PTCL_CONTRACT_DATABASE_URL", "postgresql+psycopg://ptcl:ptcl@localhost:5432/ptcl_contract"
+)
+CONTRACT_DB_NAME = CONTRACT_URL.rsplit("/", 1)[-1]
+
+PER_TEST_TABLES = ("audit_log", "exports", "corrections", "extractions", "documents")
+
+MOCK_ONLY = {
+    "test_status_progresses_queued_to_complete": (
+        "simulated status progression is a property of the mock's fake clock. The real app "
+        "leaves an upload `queued` because enqueue is still a stub — no Celery worker exists "
+        "yet, so no upload can reach a terminal status by itself."
+    )
+}
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if item.originalname in MOCK_ONLY and "real" in item.callspec.params.values():  # type: ignore[attr-defined]
+            item.add_marker(pytest.mark.skip(reason=MOCK_ONLY[item.originalname]))
+
+
+def postgres_is_reachable() -> bool:
+    try:
+        with sqlalchemy.create_engine(ADMIN_URL, isolation_level="AUTOCOMMIT").connect():
+            return True
+    except Exception:
+        return False
 
 
 @pytest.fixture(scope="session")
@@ -28,8 +65,68 @@ def validator(extraction_schema: dict[str, Any]) -> Draft202012Validator:
     return Draft202012Validator(extraction_schema)
 
 
-@pytest.fixture(autouse=True)
-def reset_state() -> Iterator[None]:
+@pytest.fixture(scope="session")
+def real_app(tmp_path_factory: pytest.TempPathFactory) -> FastAPI:
+    if not postgres_is_reachable():
+        pytest.skip(
+            f"no Postgres at {ADMIN_URL}. Start one with: "
+            "cd CodeBase/backend && docker compose up -d"
+        )
+
+    admin = sqlalchemy.create_engine(ADMIN_URL, isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        exists = connection.execute(
+            text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": CONTRACT_DB_NAME}
+        ).scalar()
+        if not exists:
+            connection.execute(text(f'CREATE DATABASE "{CONTRACT_DB_NAME}"'))
+
+    workspace = tmp_path_factory.mktemp("contract")
+    os.environ["DATABASE_URL"] = CONTRACT_URL
+    os.environ["UPLOAD_DIR"] = str(workspace / "uploads")
+    os.environ["EXPORT_DIR"] = str(workspace / "exports")
+
+    from alembic import command
+    from alembic.config import Config
+
+    from app.core.config import get_settings
+    from app.db.session import get_engine, get_sessionmaker
+
+    get_settings.cache_clear()
+    get_engine.cache_clear()
+    get_sessionmaker.cache_clear()
+
+    config = Config(str(BACKEND / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND / "app" / "db" / "migrations"))
+    config.set_main_option("sqlalchemy.url", CONTRACT_URL)
+    command.upgrade(config, "head")
+
+    from app.db.seed import seed_users
+
+    with get_engine().begin() as connection:
+        connection.execute(
+            text(f"TRUNCATE {', '.join((*PER_TEST_TABLES, 'users'))} RESTART IDENTITY CASCADE")
+        )
+    with get_sessionmaker()() as db:
+        seed_users(db)
+
+    from app.main import create_app
+
+    return create_app()
+
+
+def _reset_real_app() -> None:
+    from app.core.config import get_settings
+    from app.db.seed import seed_review_state_documents
+    from app.db.session import get_engine, get_sessionmaker
+
+    with get_engine().begin() as connection:
+        connection.execute(text(f"TRUNCATE {', '.join(PER_TEST_TABLES)} RESTART IDENTITY CASCADE"))
+    with get_sessionmaker()() as db:
+        seed_review_state_documents(db, get_settings())
+
+
+def _reset_mock() -> None:
     mock_server.CORRECTIONS.clear()
     mock_server.EXPORTS.clear()
     known = {
@@ -40,33 +137,47 @@ def reset_state() -> Iterator[None]:
     for document_id in list(mock_server.DOCUMENTS):
         if document_id not in known:
             del mock_server.DOCUMENTS[document_id]
-    yield
+    for document_id in known:
+        mock_server.DOCUMENTS[document_id]["uploaded_monotonic"] = None
+
+
+@pytest.fixture(params=["mock", "real"])
+def under_test(request: pytest.FixtureRequest) -> str:
+    target: str = request.param
+    if target == "real":
+        request.getfixturevalue("real_app")
+    return target
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
-    with TestClient(mock_server.app) as test_client:
+def client(under_test: str, request: pytest.FixtureRequest) -> Iterator[TestClient]:
+    _reset_mock()
+    if under_test == "mock":
+        application: FastAPI = mock_server.app
+    else:
+        application = request.getfixturevalue("real_app")
+        _reset_real_app()
+
+    with TestClient(application) as test_client:
         yield test_client
+
+
+def _login(client: TestClient, email: str) -> dict[str, str]:
+    response = client.post(
+        "/api/v1/auth/login", json={"email": email, "password": mock_server.PASSWORD}
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 @pytest.fixture
 def reviewer(client: TestClient) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"email": "reviewer@ptcl.internal", "password": mock_server.PASSWORD},
-    )
-    assert response.status_code == 200
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return _login(client, "reviewer@ptcl.internal")
 
 
 @pytest.fixture
 def viewer(client: TestClient) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/login",
-        json={"email": "viewer@ptcl.internal", "password": mock_server.PASSWORD},
-    )
-    assert response.status_code == 200
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return _login(client, "viewer@ptcl.internal")
 
 
 def assert_error_envelope(payload: dict[str, Any], code: str, retryable: bool) -> None:

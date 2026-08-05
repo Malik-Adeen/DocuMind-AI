@@ -28,6 +28,74 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-05 — the mock is now backed by a real app; contract suite runs against both
+
+**Touched:** INV-3, INV-4, INV-6 · `backend/app/db/{models,session,queries,seed,fixtures}.py` (new),
+`backend/app/db/migrations/` (new), `backend/app/{main.py,api/,core/,services/,export/,schemas/}`
+(new), `backend/docker-compose.yml` (new), `backend/alembic.ini` (new),
+`backend/tests/integration/` (new), `backend/tests/contract/conftest.py`,
+`backend/tests/mock_server.py`, `backend/pyproject.toml`, `backend/CLAUDE.md`,
+`Docs/ARCHITECTURE.md` §6, `Docs/API_CONTRACT.md` §2 §7 §9
+
+Three commits, plus one baseline commit that landed the previous sessions' work — HEAD was still at
+the scaffold, so nothing had a coherent tree to sit on.
+
+**Did:** Postgres 16 with six tables. INV-4 and INV-6 are **triggers**, not conventions: every
+`UPDATE`/`DELETE` on `extractions`, `corrections` and `audit_log` raises `restrict_violation`, and an
+`UPDATE` changing `documents.data_classification`, `storage_path` or `sha256` raises too. A
+`before_flush` listener raises first with a message naming the invariant, so the ORM path fails
+readably; both layers are tested separately. The current view — latest extraction plus newest
+correction per field — is one SQL statement.
+
+Nine real endpoints, JWT with three roles, uploads content-addressed on disk and `chmod 0444`.
+Enqueue is a stub as instructed. Contract suite parameterised over `mock` and `real`: **the same 36
+tests run against both, and `test_api_contract.py` was not edited by a single character.**
+
+**Learned / broke:** three things, all found by things failing rather than by reading.
+
+**"Latest" was a coin flip.** `ORDER BY created_at DESC, id DESC` looks obviously correct and is
+not: `now()` is *transaction start time*, so two rows written in one transaction tie exactly, and
+the tiebreak then falls to a random UUID. The current view would have returned an arbitrary one of
+two extractions, silently, with no error and no test failure — a wrong number reaching a billing
+sheet by way of a `bigint` nobody thought about. Ordering is now an `IDENTITY` sequence. This is the
+same family as the money-in-float rule: do not let a value that must be exact depend on a
+representation chosen for a different purpose.
+
+**`TRUNCATE` walks straight past both triggers.** Row-level triggers do not fire on truncate, so the
+append-only guarantee is only as strong as the grants. The test suite relies on this to reset
+between cases, which means the escape hatch is *in daily use* — it needs to be a revoked privilege
+in any real deployment, and that is now written into `ARCHITECTURE` §6 rather than left as a
+property of the code nobody would think to check.
+
+**One contract test cannot pass against the real app, and it should not.**
+`test_status_progresses_queued_to_complete` asserts an upload reaches `complete`. The mock does that
+on a fake clock; the real app cannot, because enqueue is a stub with no Celery behind it. The
+temptation was to weaken the assertion so both sides go green — which would have deleted the only
+test that will notice when the worker lands and does not work. It is skipped for `real` with the
+reason spelled out, and the skip is in `conftest.py`, not in the test file, so the target stays
+exactly as written.
+
+Also worth recording: the fixtures existed twice — once in `mock_server.py`, once as whatever the
+real app would seed. Running the suite against both would then have been comparing two copies of the
+same hand-maintained data and calling it agreement. They now come from one module,
+`app/db/fixtures.py`, which the mock imports and the seeder writes. `needs_review_count` was
+hardcoded `3/2/0` in the mock and had no definition anywhere; it is now defined in `API_CONTRACT`
+§7 and computed, which changed the fixture numbers to `6/4/0`.
+
+Smaller: `JWT_SECRET` defaulted to `change-me`, nine bytes, and PyJWT warned about it on every
+decode. The listing endpoint exposed `from_` rather than the contract's `from`.
+
+**Next:** two things the frontend dev needs, on top of 0.2.0 and 0.3.0 which he still has not been
+told about. **An uploaded document on the real server never leaves `queued`** — there is no worker,
+so the review screen has to be built against the three seeded fixture documents or against the mock.
+And the export endpoint renders inline inside the POST handler; it returns `202 queued` per the
+contract while having already finished, which is a lie the contract currently requires and which
+stops being one when Celery lands.
+
+Nothing in the pipeline is wired to any of this yet: `paddle.py` has still never run against a real
+model, and no extraction is ever produced by the application — every extraction in the database was
+put there by the seeder.
+
 ## 2026-08-05 — first real pipeline stage: PaddleOCR wrapper and a synthesised degradation ladder
 
 **Touched:** INV-2 · `backend/app/pipeline/ocr/paddle.py` (new), `backend/tools/degrade.py` (new),

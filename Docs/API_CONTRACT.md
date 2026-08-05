@@ -346,16 +346,32 @@ The mock and the real application seed **the same three documents from the same 
 Neither maintains its own copy, because two hand-kept copies of a fixture drift silently and the
 contract suite would then be comparing the mock against itself.
 
-### Contract tests
+### Contract tests run against both servers
 
 `backend/tests/contract/` asserts every response against `EXTRACTION_SCHEMA.json` using a real
 JSON-Schema validator, not a status-code check. The suite includes a test proving the validator
 rejects the removed `gates[].passed` boolean, an invalid `result` value, a non-2dp money string,
 and a field missing its `source` — so a green run means the schema was actually enforced.
 
+**Every test is parameterised over `mock` and `real`**, so the same 36 assertions run twice: once
+against `tests/mock_server.py` and once against `app.main:app` on Postgres. That is what makes the
+mock trustworthy — it is not a separate promise the frontend has to hope matches, it is checked
+against the implementation on every run. A divergence is a bug in whichever side is wrong; it is
+never fixed by relaxing the test.
+
 ```bash
-uv run pytest tests/contract -q
+docker compose up -d && uv run alembic upgrade head
+uv run pytest tests/contract -q      # 71 passed, 1 skipped
 ```
+
+Without Postgres the real half skips and the mock half still runs (`36 passed, 36 skipped`), so the
+suite stays usable on a machine with no Docker.
+
+**One test is mock-only:** `test_status_progresses_queued_to_complete`. The mock simulates
+`queued → ocr → extracting → complete` on a fake clock; the real app has no Celery worker yet, so
+`enqueue_extraction()` is a no-op and an upload stays `queued` forever. The skip names that reason.
+**Frontend: on the real server today, an uploaded document never leaves `queued`** — poll against
+the mock, or use the three seeded fixture documents, until the worker lands.
 
 The mock lives under `tests/`, **not** under `app/`. It is a test double: shipped code must never
 import it, and it stays outside the mypy-strict scope (`files = ["app"]`). A mock in `app/` is a
