@@ -46,10 +46,13 @@ backend/
 ## Commands
 
 ```bash
+docker compose up -d                       # postgres 16, required by the app and integration tests
+uv run alembic upgrade head                # apply migrations
 uv run uvicorn app.main:app --reload      # dev server
 uv run celery -A app.workers worker -l info
 uv run pytest tests/unit -q                # fast, run constantly
 uv run pytest tests/contract -q            # must pass before any push
+uv run pytest tests/integration -q         # needs postgres; skips cleanly without it
 uv run alembic revision --autogenerate -m ""
 uv run python evals/run_eval.py            # nightly; exits non-zero on gate failure
 uv sync --group ocr                        # installs paddleocr; not in the default sync

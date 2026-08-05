@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ptcl-postgres
+    environment:
+      POSTGRES_USER: ptcl
+      POSTGRES_PASSWORD: ptcl
+      POSTGRES_DB: ptcl
+    ports:
+      - "5432:5432"
+    volumes:
+      - ptcl-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ptcl -d ptcl"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  ptcl-pgdata:
