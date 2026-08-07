@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-04
-version: 1.1.0
+last_reviewed: 2026-08-07
+version: 1.2.0
 ---
 
 # ARCHITECTURE.md
@@ -66,6 +66,14 @@ it** — 4-bit is a quality regression of unknown size on a model whose degraded
 already unmeasured ([[EVAL_AND_GOLDEN_SET]] §2), so it is a cost to pay only when forced. Measure
 before choosing.
 
+**Correction, 2026-08-05:** the Qaari row is a 2 B vision-language model, not a small OCR model. The
+published artifact is a LoRA adapter whose declared base is `unsloth/Qwen2-VL-2B-Instruct-unsloth-bnb-4bit`
+— **already 4-bit**. So on the prototype, 4-bit is not a compromise we impose; it is the
+configuration the adapter was trained against, and merging onto an fp16 Qwen2-VL-2B is the variant
+that has *not* been validated by its author. The rows above still hold as estimates, but the
+"if fp16 fits, use it" advice is now the less-tested path rather than the safer one. Nothing here
+has been profiled.
+
 The production column has room for a second concurrent document; whether that is *useful* is the
 open concurrency question in [[PROJECT_CONTEXT]] §7, and it is answered by the load test in
 [[EVAL_AND_GOLDEN_SET]] §4, not by this table.
@@ -78,7 +86,8 @@ open concurrency question in [[PROJECT_CONTEXT]] §7, and it is answered by the 
 Browser (Next.js)
       │  HTTPS, JWT
       ▼
-FastAPI  ──────────►  PostgreSQL   (documents, extractions, corrections, audit)
+FastAPI  ──────────►  PostgreSQL 16  (documents, extractions, corrections,
+      │                                exports, users, audit_log)
       │                     ▲
       │ enqueue             │
       ▼                     │
@@ -101,6 +110,40 @@ Redis ──► Celery worker ────┘
                             ▼
                   Excel generator (on demand)
 ```
+
+**The diagram above describes the intended shape; nothing currently drives it end to end.** No
+Celery worker exists yet (`app/workers/` is empty, `enqueue_extraction()` is a documented no-op —
+[[JOURNAL]] 2026-08-07), so today the chain below runs only when a caller invokes it directly, as
+the tests do.
+
+**Stages 3–7 are `app/pipeline/orchestrator.py`.** It is the only code that calls OCR, the LLM
+client and the gate modules in sequence — before it existed, each of those was tested only in
+isolation. `extract()` is a pure function, `DocumentRecord` in and an `ExtractionOutcome` out, with
+OCR/LLM/gates all injected; `run_and_persist()` wraps it with a `Session` to write the `Extraction`
+row and update `documents.status`. It does not import Celery or know it will eventually run inside
+a worker — that wiring is separate and later.
+
+Schema validation (Stage 5) runs on the LLM's **raw** JSON — `document_type` / `language` /
+`fields` / `line_items` only, checked against a schema built from `EXTRACTION_SCHEMA.json`'s own
+`$defs` via `jsonschema`'s `Draft202012Validator` — before `document_id`, `pipeline_version`,
+`status` and `gates` are stitched on by the orchestrator. A field missing `source` or `confidence`
+fails the whole stage, not just that field, because both are already required by `$defs/field`
+(INV-2). Every field's `verified` is then force-reset to `false`, regardless of what the LLM
+claimed; only a gate result of `passed` can set it back to `true` (INV-5) — a field the model
+reports 0.99 confidence on is not verified if no gate touched it, and stays unverified if a gate
+touching it failed.
+
+**The gate registry (`DEFAULT_GATES`) is an explicit tuple, not import-scanning.** A gate module
+that exists under `pipeline/gates/` but is not added to that tuple never runs — a silent hole, by
+design made visible rather than automatic. Before persisting, every top-level money field (derived
+from `EXTRACTION_SCHEMA.json`'s `money_field` refs, not hand-listed — currently `mrc`, `otc`,
+`subtotal`, `tax`, `total`) must carry a non-null `gate`; if none of the registered gates touched
+it, `run_and_persist` refuses to write the row rather than persist an unchecked number (INV-1).
+
+**Routing:** `complete` only if every populated top-level field ends up `verified: true`;
+otherwise `needs_review`. In practice this routes most realistic documents to review, since fields
+like `customer_name` have no gate at all yet — that is the intended bias ([[PROJECT_CONTEXT]] §2),
+not a bug to tighten.
 
 Local filesystem for raw uploads and exports. Not MinIO, not S3 — a directory with a documented
 path and a backup cron. Swap later if it ever needs to be shared across nodes.
@@ -126,6 +169,16 @@ Urdu script; Qaari is Urdu-specialised and not a general layout engine.
 
 Flow: PaddleOCR runs first and produces layout regions. Regions whose script is detected as Urdu
 are re-read by Qaari. Results are merged by bounding box, Qaari winning on overlap in Urdu regions.
+
+**Qaari returns no coordinates, and the merge depends on that being understood.** It is not a
+detection-plus-recognition engine like PaddleOCR — it is a **PEFT/LoRA adapter on Qwen2-VL-2B**, a
+vision-language model prompted to "return the plain text representation of this document". Given a
+region crop it returns text and nothing else. So the bbox attached to any Urdu field comes from
+**PaddleOCR's detection**, never from Qaari; Qaari only replaces the *string* inside a box
+PaddleOCR already found. Two consequences: PaddleOCR must detect an Urdu region even when it reads
+it badly, or the region is invisible to the whole pipeline; and INV-2's source span for an Urdu
+field is Latin-stage provenance carrying Urdu-stage text. Verified against the model card,
+[[DATASETS]] §4.
 
 **Cost:** two model loads resident on one GPU, and a merge step that can produce duplicated or
 dropped text at region boundaries. That merge is a known sharp edge — it needs its own unit tests

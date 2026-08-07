@@ -13,16 +13,20 @@ Package manager: `uv`. Lint/format: `ruff`. Types: `mypy` on `app/` (not on test
 ```
 backend/
 ├── app/
-│   ├── api/v1/          # routers — thin, no business logic
-│   ├── core/            # config, security, logging
-│   ├── db/              # models, session, migrations/
-│   ├── schemas/         # pydantic — generated from EXTRACTION_SCHEMA.json, not hand-written
+│   ├── main.py          # create_app() — routers, error handlers, trace_id middleware
+│   ├── api/
+│   │   ├── deps.py      # get_db, current_user, require_role
+│   │   └── v1/          # routers — thin, no business logic
+│   ├── core/            # config, security (JWT/pbkdf2), errors, storage, logging
+│   ├── db/              # models, session, queries, seed, fixtures, migrations/
+│   ├── services/        # business logic the routers delegate to
+│   ├── schemas/         # loaded from EXTRACTION_SCHEMA.json, not hand-written
 │   ├── pipeline/
 │   │   ├── ocr/         # paddle.py, qaari.py, merge.py
 │   │   ├── llm/         # client.py, prompts/, repair.py
 │   │   ├── gates/       # one module per validator
 │   │   └── orchestrator.py
-│   ├── workers/         # celery tasks
+│   ├── workers/         # celery tasks — not written yet, enqueue is a stub
 │   └── export/          # xlsx, csv, json
 ├── tests/
 │   ├── unit/  integration/  contract/  fixtures/
@@ -36,6 +40,7 @@ backend/
 - **Pydantic models derive from `EXTRACTION_SCHEMA.json`.** Do not hand-maintain a parallel definition — they will drift. Generate or load, and test that they match.
 - **Each gate is one module, one pure function**, signature `(extraction) -> GateResult`. No I/O, no model calls. Trivially unit-testable, and that is the point.
 - **A gate returns three states, not two:** `passed`, `failed`, `format_only`. Format-only checks (CNIC, NTN, STRN) can never set `verified: true` — they have no checksum. Only IBAN mod-97, arithmetic reconciliation, and date parse can verify.
+- **The gate registry in `orchestrator.py` (`DEFAULT_GATES`) is explicit, not import-scanning.** A gate module that exists under `pipeline/gates/` but isn't added to that tuple never runs — add it there when it ships, in the same commit.
 - **Money is `Decimal` in Python, `NUMERIC` in Postgres, decimal string in JSON.** Never float, at any layer.
 - **Every DB write that represents an extraction or correction is an INSERT.** No UPDATE on those tables (INV-4).
 - **Celery tasks are idempotent and re-runnable.** Assume the worker will die mid-task, because it will.

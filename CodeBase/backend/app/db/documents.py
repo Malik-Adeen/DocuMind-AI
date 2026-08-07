@@ -25,6 +25,7 @@ class DocumentRecord:
     filename: str
     data_classification: DataClassification = DataClassification.RESTRICTED
     uploaded_at: str | None = None
+    storage_path: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "data_classification", classify(self.data_classification))

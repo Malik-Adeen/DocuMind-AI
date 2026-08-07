@@ -21,6 +21,7 @@ def record(classification: object = DataClassification.SYNTHETIC) -> DocumentRec
         filename="invoice-2291.pdf",
         data_classification=classification,  # type: ignore[arg-type]
         uploaded_at="2026-08-05T09:00:00Z",
+        storage_path="var/uploads/aa/invoice-2291.pdf",
     )
 
 
@@ -35,11 +36,16 @@ def test_assigning_the_classification_is_rejected() -> None:
     assert document.data_classification is DataClassification.SYNTHETIC
 
 
-@pytest.mark.parametrize("field", ["document_id", "filename", "uploaded_at"])
+@pytest.mark.parametrize("field", ["document_id", "filename", "uploaded_at", "storage_path"])
 def test_the_whole_record_is_immutable_not_just_the_classification(field: str) -> None:
     document = record()
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(document, field, "x")
+
+
+def test_storage_path_defaults_to_none() -> None:
+    document = DocumentRecord(document_id=DOC, filename="scan.pdf")
+    assert document.storage_path is None
 
 
 def test_deleting_the_classification_is_rejected() -> None:

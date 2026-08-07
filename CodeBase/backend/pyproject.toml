@@ -18,6 +18,7 @@ dependencies = [
     "httpx>=0.28",
     "openpyxl>=3.1",
     "pillow>=11.0",
+    "jsonschema>=4.23",
 ]
 
 [dependency-groups]
@@ -26,8 +27,8 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "jsonschema>=4.23",
     "types-openpyxl>=3.1",
+    "types-jsonschema>=4.23",
 ]
 ocr = [
     "paddleocr>=3.0",

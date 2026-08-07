@@ -1,7 +1,7 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-04
+last_reviewed: 2026-08-05
 version: 1.0.0
 ---
 
@@ -27,6 +27,134 @@ Entry format:
 ---
 
 <!-- newest entry goes here -->
+
+## 2026-08-07 — the orchestrator: first code that connects OCR, LLM and gates
+
+**Touched:** INV-1, INV-2, INV-4, INV-5, INV-6 · `backend/app/pipeline/orchestrator.py` (new),
+`backend/tests/unit/test_orchestrator.py` (new), `backend/tests/integration/test_orchestrator_e2e.py`
+(new), `backend/app/db/documents.py` (`DocumentRecord.storage_path`, new field),
+`backend/tests/unit/test_document_record.py`, `backend/pyproject.toml` (`jsonschema` and
+`types-jsonschema` moved out of the dev-only group), `Docs/ARCHITECTURE.md` §2,
+`Docs/PROJECT_CONTEXT.md` §3, `CodeBase/backend/CLAUDE.md`
+
+**Did:** built the piece the 2026-08-05 sessions kept finding absent — nothing previously called
+`paddle.py`, `llm/client.py`, `gates/iban.py` or `gates/arithmetic.py` outside each module's own unit
+test, and every `Extraction` row in the database had been put there by the seeder, never by the app.
+`extract()` is a pure function (`DocumentRecord` in, `ExtractionOutcome` out — OCR, LLM and the gate
+registry all injected); `run_and_persist()` wraps it with a `Session`, writes the `Extraction` row and
+sets `documents.status`. It does not import Celery and does not know a worker will eventually call it.
+
+Schema validation runs on the LLM's raw JSON (`document_type`/`language`/`fields`/`line_items` only)
+against a schema built from `EXTRACTION_SCHEMA.json`'s own `$defs`, before `document_id`,
+`pipeline_version`, `status` and `gates` are stitched on — a field missing `source` or `confidence`
+fails the whole stage, not just that field. Every field's `verified` is force-reset to `false` after
+validation regardless of what the LLM claimed; only a `passed` gate result can set it back. The gate
+registry (`DEFAULT_GATES`) is an explicit tuple, not import-scanning — appending to it is the whole
+integration cost for a new gate module. Before persisting, every top-level money field (read off the
+schema's `money_field` refs, not hand-listed) must carry a non-null `gate`, or `run_and_persist`
+refuses to write the row. Routing is `complete` only if every populated top-level field ends up
+verified, else `needs_review`.
+
+167 unit tests (12 new), 41 integration tests (3 new) against real Postgres — including a same-document
+rerun proving two independent rows, not an update, and an unmodified `app/export/xlsx.py` reading the
+orchestrator's own output correctly. `ruff check` / `ruff format --check` / `mypy` / `pytest tests/unit
+tests/contract` all clean: `238 passed, 1 skipped in 9.26s` (the one skip is the pre-existing, documented
+`test_status_progresses_queued_to_complete` real-app skip — unrelated to this change).
+
+**Learned / broke:** `jsonschema` had been a dev-only dependency since the contract suite adopted it —
+correct at the time, since nothing shipped used it. It now has to run inside `app/` at request time
+(schema validation is a pipeline stage, not a test), so it moved to a real dependency; `types-jsonschema`
+went with it for `mypy --strict`. A dependency's classification is a claim about who calls it, and that
+claim changed the moment the orchestrator did.
+
+The harder design question was what "every field carries confidence and a source span" (INV-2) and "no
+money value is persisted without a gate verdict" (INV-1) mean operationally, since neither gate module
+annotates anything below the top-level `fields` object. Resolved by scope, not by extending the gates:
+`write_workbook` only exports top-level fields, never `line_items`, so INV-1's "reaches Excel unchecked"
+is about top-level money fields specifically, and the coverage check is scoped there. A field with two
+gates touching it (e.g. `subtotal`, touched by both `line_item_sum` and `arithmetic_reconciliation`)
+resolves `verified` as the AND of every touching gate's verdict, and `gate` names whichever ran last —
+tested, not left implicit.
+
+**Next:** the orchestrator is real but unreached — nothing calls `run_and_persist` from the API or a
+worker yet, so an uploaded document still never leaves `queued` in the running app (Celery, W7 in the
+prototype roadmap). `llm/prompts/` is still empty; `build_prompt` is a minimal placeholder that joins OCR
+region text and asks for JSON — real prompt engineering, and grounding `source.bbox` back onto OCR
+regions rather than trusting whatever the LLM claims, is separate future work. Only `iban_checksum` and
+`arithmetic_reconciliation` are registered in `DEFAULT_GATES`; `date_parse`, `currency_consistency`,
+`cnic_format_check`, `ntn_format_check`, `strn_format_check` don't exist as modules yet, so any document
+carrying those fields will always route to `needs_review` regardless of correctness — expected given the
+project's bias toward flagging over guessing, but worth naming so it isn't mistaken for a bug later.
+
+## 2026-08-05 — documentation pass: Synthdog-RTL verified, ADR-008, DATASETS, staleness sweep
+
+**Touched:** no INV directly · `Docs/DATASETS.md` (new),
+`Docs/decisions/ADR-008-synthetic-generation-is-a-component.md` (new),
+`Docs/decisions/ADR-002-two-stage-ocr.md` (amendment banner), `Docs/PROJECT_CONTEXT.md` §3 §7 §8,
+`Docs/ARCHITECTURE.md` §1 §2 §4, `Docs/EVAL_AND_GOLDEN_SET.md` §2 §4 §5, `Docs/INDEX.md`,
+`CodeBase/backend/CLAUDE.md`, `CodeBase/backend/.env.example`
+
+No code changed. Documentation only.
+
+**Did:** cloned Synthdog-RTL at `15e9d1f` and read all 528 lines rather than the README. Wrote
+ADR-008 (requested as 007 — that number was taken earlier the same day) and `DATASETS.md`. Swept
+every doc against the code as it now stands.
+
+**Learned / broke — four findings, three of which change what we thought.**
+
+**Synthdog-RTL does none of the three things it was being planned around.** No field boxes: the only
+geometry it computes is the page quad at `template.py:70`, and `save()` binds it and never writes
+it; per-token layers are destroyed by `Group(...).merge()` at `textbox.py:42`. No structured JSON:
+`keys=["text_sequence"]` at `template.py:99` — it emits Donut's `gt_parse` *envelope* around a
+single flat string, which is almost certainly why one source read it as "Donut-style JSON". Not even
+line-level: `label = " ".join(texts)` concatenates every textbox on the page. And no bidi at all —
+`get_display` is imported at `template.py:15` and never called, RTL is a right-to-left *word
+advance* that would reverse English word order in a mixed line, the shipped corpus has zero Latin
+characters, and the fonts are Nastaliq-only. **The `bidirectional: 0` in the configs is a shadow
+effect parameter**, which is the likeliest single cause of the three-way disagreement: it reads
+exactly like a text-direction switch.
+
+**The Qaari news dataset is missing the letter آ.** Entirely. Zero occurrences across 11 sampled
+rows while dozens of words require it — `مارشل رٹ` for `مارشل آرٹ`, `کسیجن` for `آکسیجن`, `رڈیننس`
+for `آرڈیننس`, `ئل` for `آئل`. ؤ (U+0624) looks affected too. This matters more than the
+contamination worry that prompted the check: a CER against these labels *rewards* dropping a common
+Urdu character, and if Qaari trained on them it has learned to drop it. Sample size is 11 rows and a
+full count was not run — that count is the first thing anyone using this corpus should do.
+
+**The contamination hypothesis was half wrong and the conclusion survived anyway.** The model card
+says the training set was 10,000 *synthetic* images; the news dataset is 35.9 K *real news*. They
+cannot be the same corpus. Recorded in `DATASETS` §4 as a conflict rather than resolved. But the
+card names **no evaluation set at all** for its headline 0.048 WER, so the number was never
+attributable regardless — which is a better reason than the one we started with.
+
+**Qaari yields no bounding boxes, and ADR-002 assumed it does.** ADR-002 says "whatever runs here
+has to yield boxes, not just text" and then selects Qaari, which is a LoRA adapter on Qwen2-VL-2B
+prompted for plain page text. The two-stage design survives — PaddleOCR supplies every box, Qaari
+replaces only the string inside one — but the unanticipated consequence is that **an Urdu region
+PaddleOCR fails to detect is invisible to the whole pipeline**, because nothing else produces
+regions. ADR-002 got a banner; its reasoning is untouched.
+
+**Staleness found and fixed:** `.env.example` pointed `QAARI_MODEL` at `NAMAA-Space/Qaari-0.1-Urdu`,
+an org that does not exist — the model is `oddadmix/Qaari-0.1-Urdu-OCR-VL-2B-Instruct`. Nobody would
+have noticed until the first Urdu run failed to download. `backend/CLAUDE.md`'s layout block
+predated `app/services/`, `app/main.py` and half of `app/db/`. `ARCHITECTURE` §2 listed four tables
+where there are six. `EVAL` §4's load test is specified against an L20 that does not exist, and §5
+describes a harness — `run_eval.py`, `scorers.py` — that has never been written, while
+`backend/CLAUDE.md` lists it as a runnable command. That last one is the sharpest: **no number this
+project produces is quotable yet under EVAL §1, because the thing that would make one quotable does
+not exist.**
+
+**Found already correct** and left alone: `ARCHITECTURE` §6 (six tables, both triggers, the TRUNCATE
+escape hatch, `seq` ordering, the no-money-column reasoning), `API_CONTRACT` 0.3.0 throughout
+including the computed `needs_review_count` and the dual-target contract suite, INV-1 … INV-6 in
+`PROJECT_CONTEXT` §6, `EXTRACTION_SCHEMA` 0.3.0, and every ADR's reasoning.
+
+**Next:** `DATASETS.md` §7 is a stub — the three research responses it was meant to merge were never
+supplied to me, so anything they found outside Hugging Face (Kaggle, university pages, LDC/ELRA,
+paper supplements) is missing. Paste them and §7 fills in. Separately, ADR-008 item 3 names FBR SRO
+1006(I)/2021 as the generator's field schema and **that SRO has not been read into this repository**
+— the mapping onto `EXTRACTION_SCHEMA.json` does not exist, so that item is a decision with no
+implementation behind it.
 
 ## 2026-08-05 — the mock is now backed by a real app; contract suite runs against both
 
