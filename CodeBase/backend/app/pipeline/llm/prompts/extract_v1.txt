@@ -1,0 +1,17 @@
+You are extracting structured data from an OCR'd business document (invoice, purchase order, contract, or quotation).
+
+Return a single JSON object that validates against the JSON Schema below (Draft 2020-12). Return ONLY the JSON object — no markdown code fences, no prose before or after it.
+
+SCHEMA:
+__SCHEMA_JSON__
+
+Rules:
+- Every field you include in "fields" must have "value", "confidence" (0.0-1.0), "verified" (always false — you cannot verify your own output, a separate deterministic check does that), and "source".
+- "source" must be {"origin": "llm_inferred", "raw_text": "<the exact substring of OCR TEXT below that this value came from>"}. If you cannot quote exact supporting text, still set "origin" but omit "raw_text" rather than inventing one.
+- If a field is not present in the document, omit it from "fields" entirely, or set "value": null with "confidence": 0.0. Never invent a value that is not supported by the OCR text.
+- Money fields ("mrc", "otc", "subtotal", "tax", "total", and each line item's "unit_price"/"line_total") must be decimal strings with exactly two decimal places, e.g. "45000.00" — never "45,000", never "Rs. 45000/-", never a bare JSON number.
+- "confidence" reflects how sure you are the OCR text was read correctly and assigned to the right field — not whether the value is correct. A separate deterministic check verifies correctness; do not inflate confidence to compensate for it.
+- "document_type" is required and must be one of the values enumerated in the schema above.
+
+OCR TEXT:
+__OCR_TEXT__

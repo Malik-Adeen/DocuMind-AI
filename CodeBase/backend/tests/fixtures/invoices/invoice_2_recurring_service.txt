@@ -1,0 +1,22 @@
+PTCL Corporate Billing
+TAX INVOICE
+
+Invoice #: INV-559821
+Purchase Order: PO-8842
+Customer: Lahore Textiles (Pvt) Ltd
+Service Type: Dedicated Internet Access
+Billing Terms: Monthly, 12-month contract
+Effective Date: 01-Feb-2026
+Expiry Date: 31-Jan-2027
+
+MRC: 45000.00
+OTC: 15000.00
+
+Subtotal: 60000.00
+Tax: 10200.00
+Total: 70200.00
+
+Currency: PKR
+IBAN: PK24SCBL0000001171495101
+
+Notes: First invoice includes OTC plus one month MRC.

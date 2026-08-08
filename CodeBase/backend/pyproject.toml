@@ -17,6 +17,8 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "httpx>=0.28",
     "openpyxl>=3.1",
+    "pillow>=11.0",
+    "jsonschema>=4.23",
 ]
 
 [dependency-groups]
@@ -25,6 +27,11 @@ dev = [
     "mypy>=1.13",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    "types-openpyxl>=3.1",
+    "types-jsonschema>=4.23",
+]
+ocr = [
+    "paddleocr>=3.0",
 ]
 
 [tool.uv]
@@ -37,12 +44,24 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "N"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Query",
+]
+
 [tool.mypy]
 python_version = "3.11"
 files = ["app"]
 strict = true
 warn_unreachable = true
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["paddleocr.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,7 +1,7 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-04
+last_reviewed: 2026-08-05
 version: 1.0.0
 ---
 
@@ -27,6 +27,488 @@ Entry format:
 ---
 
 <!-- newest entry goes here -->
+
+## 2026-08-08 — W4/W5: real hosted transport, real prompts, first live run — unimproved baseline
+
+**Touched:** INV-1, INV-2, INV-5, INV-6 · `backend/app/pipeline/llm/transport.py` (new),
+`backend/app/pipeline/llm/repair.py` (new), `backend/app/pipeline/llm/prompt_builder.py` (new),
+`backend/app/pipeline/llm/prompts/extract_v1.txt` (new — first real file in a directory that was
+`.gitkeep` only), `backend/app/schemas/extraction.py` (`model_output_schema()`, shared, non-circular),
+`backend/app/pipeline/orchestrator.py` (wired to the two above, replacing the placeholder prompt and
+direct-parse call), `backend/app/core/config.py` (`hosted_llm_*`, `llm_max_repair_retries`),
+`backend/.env.example`, `backend/tests/fixtures/invoices/` (three hand-authored synthetic invoices,
+new), `backend/tools/run_demo_extraction.py` (new, dev-only), `Docs/ARCHITECTURE.md` §2
+
+**Did:** `HostedChatTransport` is a thin OpenAI-compatible chat-completions caller (`httpx.Client`
+injected, `max_tokens` capped at 2000) sitting under the existing, untouched INV-6 guard —
+`assert_releasable` still runs inside `LLMClient.complete` before any transport call, and the guard's
+own tests were not touched. `complete_with_repair` retries exactly once on malformed JSON or a
+schema-validation failure, building a repair prompt that quotes the bad output and the error back to
+the model; a guard refusal or a raw transport error is deliberately **not** caught by that loop and
+propagates immediately — retries are for the model's output, not for infrastructure or INV-6. The
+prompt is a real file now (`prompts/extract_v1.txt`), interpolated with the OCR text and the *live*
+`EXTRACTION_SCHEMA.json` (via a new shared `model_output_schema()` in `schemas/extraction.py`, reused
+by both the prompt and the orchestrator's own validator) so the two can never disagree.
+
+Three English invoices written by hand as OCR-text fixtures (not rendered images — real image
+generation is ADR-008/W0, not this session): a simple one-off equipment invoice, an MRC/OTC recurring
+service invoice, and a deliberately noisy/misaligned layout carrying a CNIC, an NTN, and an IBAN whose
+checksum digit is wrong on purpose (`PK70BANK...`, the same known-bad IBAN used in
+`test_iban_gate.py`) — meant to exercise a live `iban_checksum` failure.
+
+**First live run, `qwen/qwen-2.5-7b-instruct` via OpenRouter, unmodified prompt, as instructed — not
+tuned:**
+
+- The configured slug (`Qwen/Qwen2.5-7B-Instruct`, copied from the `VLLM_MODEL` convention) does not
+  exist on OpenRouter; resolved by querying `/models` — the real slug is lowercase and hyphenated,
+  `qwen/qwen-2.5-7b-instruct`. Confirmed with a 10-token round trip before spending the real prompt.
+- All three JSON responses were valid on the **first** attempt — `complete_with_repair`'s retry path
+  never fired against a real model in this run, so it remains verified only against fakes.
+- **Invoice 1 hallucinated `mrc` and `otc`.** The document has no MRC/OTC billing at all (a one-time
+  equipment invoice), but the model copied `subtotal` into `mrc` and `tax` into `otc`, reusing the
+  same `source.raw_text` for both pairs — not a misread, an invented field association. The prompt
+  explicitly says to omit or null a field that is not present; the model did that correctly for
+  `mrc`/`otc` on invoice 3 (no MRC/OTC line there either) and incorrectly on invoice 1. Same missing
+  data, two different behaviors in the same run — worth naming as it happened, not smoothed over.
+  Invoice 1 also invented a `billing_terms` value by duplicating `notes`, another field genuinely
+  absent from the source.
+- **Invoice 3 dropped the IBAN entirely.** The line `Bank   IBAN :  PK70 BANK 0000 0012 3456 7890` is
+  present and was correctly read for every other adjacent field (CNIC, NTN, dense multi-column
+  layout survived intact) — but `iban` never appears in `fields`, so the gate that was supposed to be
+  exercised live (`iban_checksum` → `failed` on the deliberately-bad checksum) instead saw an absent
+  field and returned `format_only`. The scenario this fixture was built to test did not run.
+- **Invoice 2 was clean** — every field correct, including `mrc`/`otc`/`iban` all present and correct,
+  `iban_checksum` passed for real. This is the useful negative control: it rules out "the model can't
+  handle mrc/otc" as an explanation for invoice 1's hallucination — it's document-shape-dependent, not
+  universal.
+- Money formatting, decimal places, and every gate-computable arithmetic identity were correct on all
+  three documents — the model did not fabricate a wrong total anywhere it was checked. The 7B model
+  was reliable on arithmetic transcription and unreliable on knowing what wasn't there.
+- **Every document routed `needs_review`, on all three runs** — not because anything failed, but
+  because `po_number`, `customer_name`, `vendor_name`, `cnic`, `service_type`, dates, `notes` etc.
+  have no registered gate, so they can never be `verified: true`, and `extract()`'s routing rule
+  requires *every* populated field verified to reach `complete`. Expected given today's two-gate
+  registry (`iban_checksum`, `arithmetic_reconciliation`) — not a defect in this session's code, but
+  it means "complete" will stay rare until W9/W10's gates exist.
+- **Cost:** 3 calls, 10,097 tokens total, **$0.0030** for all three documents (OpenRouter-reported,
+  not estimated). `HostedChatTransport`'s `max_tokens=2000` cap was not hit by any response.
+
+**Learned / broke:** nothing was fixed on purpose. Per instruction, this is the unimproved baseline —
+prompt content, `source.raw_text` grounding (real OCR-substring quotes, not fabricated bounding
+boxes), and the retry-on-malformed-JSON path are all still exactly as first written. The two live
+defects (mrc/otc hallucination, dropped IBAN) and the routing-is-almost-always-`needs_review`
+consequence of sparse gate coverage are now recorded facts to prompt-tune or gate-build against next,
+not guesses.
+
+**Next:** prompt tuning against these three documents (still not the real generator — that's W0);
+decide whether `source.raw_text` should be cross-checked against the actual OCR text server-side
+(the model could quote text that was never in the document, and nothing currently catches that); the
+repair-retry path has never fired against a real model and should be forced once, deliberately, to
+confirm the second attempt behaves as designed; W9/W10's gates are what will make `complete` reachable
+at all for a normal document.
+
+## 2026-08-07 — the orchestrator: first code that connects OCR, LLM and gates
+
+**Touched:** INV-1, INV-2, INV-4, INV-5, INV-6 · `backend/app/pipeline/orchestrator.py` (new),
+`backend/tests/unit/test_orchestrator.py` (new), `backend/tests/integration/test_orchestrator_e2e.py`
+(new), `backend/app/db/documents.py` (`DocumentRecord.storage_path`, new field),
+`backend/tests/unit/test_document_record.py`, `backend/pyproject.toml` (`jsonschema` and
+`types-jsonschema` moved out of the dev-only group), `Docs/ARCHITECTURE.md` §2,
+`Docs/PROJECT_CONTEXT.md` §3, `CodeBase/backend/CLAUDE.md`
+
+**Did:** built the piece the 2026-08-05 sessions kept finding absent — nothing previously called
+`paddle.py`, `llm/client.py`, `gates/iban.py` or `gates/arithmetic.py` outside each module's own unit
+test, and every `Extraction` row in the database had been put there by the seeder, never by the app.
+`extract()` is a pure function (`DocumentRecord` in, `ExtractionOutcome` out — OCR, LLM and the gate
+registry all injected); `run_and_persist()` wraps it with a `Session`, writes the `Extraction` row and
+sets `documents.status`. It does not import Celery and does not know a worker will eventually call it.
+
+Schema validation runs on the LLM's raw JSON (`document_type`/`language`/`fields`/`line_items` only)
+against a schema built from `EXTRACTION_SCHEMA.json`'s own `$defs`, before `document_id`,
+`pipeline_version`, `status` and `gates` are stitched on — a field missing `source` or `confidence`
+fails the whole stage, not just that field. Every field's `verified` is force-reset to `false` after
+validation regardless of what the LLM claimed; only a `passed` gate result can set it back. The gate
+registry (`DEFAULT_GATES`) is an explicit tuple, not import-scanning — appending to it is the whole
+integration cost for a new gate module. Before persisting, every top-level money field (read off the
+schema's `money_field` refs, not hand-listed) must carry a non-null `gate`, or `run_and_persist`
+refuses to write the row. Routing is `complete` only if every populated top-level field ends up
+verified, else `needs_review`.
+
+167 unit tests (12 new), 41 integration tests (3 new) against real Postgres — including a same-document
+rerun proving two independent rows, not an update, and an unmodified `app/export/xlsx.py` reading the
+orchestrator's own output correctly. `ruff check` / `ruff format --check` / `mypy` / `pytest tests/unit
+tests/contract` all clean: `238 passed, 1 skipped in 9.26s` (the one skip is the pre-existing, documented
+`test_status_progresses_queued_to_complete` real-app skip — unrelated to this change).
+
+**Learned / broke:** `jsonschema` had been a dev-only dependency since the contract suite adopted it —
+correct at the time, since nothing shipped used it. It now has to run inside `app/` at request time
+(schema validation is a pipeline stage, not a test), so it moved to a real dependency; `types-jsonschema`
+went with it for `mypy --strict`. A dependency's classification is a claim about who calls it, and that
+claim changed the moment the orchestrator did.
+
+The harder design question was what "every field carries confidence and a source span" (INV-2) and "no
+money value is persisted without a gate verdict" (INV-1) mean operationally, since neither gate module
+annotates anything below the top-level `fields` object. Resolved by scope, not by extending the gates:
+`write_workbook` only exports top-level fields, never `line_items`, so INV-1's "reaches Excel unchecked"
+is about top-level money fields specifically, and the coverage check is scoped there. A field with two
+gates touching it (e.g. `subtotal`, touched by both `line_item_sum` and `arithmetic_reconciliation`)
+resolves `verified` as the AND of every touching gate's verdict, and `gate` names whichever ran last —
+tested, not left implicit.
+
+**Next:** the orchestrator is real but unreached — nothing calls `run_and_persist` from the API or a
+worker yet, so an uploaded document still never leaves `queued` in the running app (Celery, W7 in the
+prototype roadmap). `llm/prompts/` is still empty; `build_prompt` is a minimal placeholder that joins OCR
+region text and asks for JSON — real prompt engineering, and grounding `source.bbox` back onto OCR
+regions rather than trusting whatever the LLM claims, is separate future work. Only `iban_checksum` and
+`arithmetic_reconciliation` are registered in `DEFAULT_GATES`; `date_parse`, `currency_consistency`,
+`cnic_format_check`, `ntn_format_check`, `strn_format_check` don't exist as modules yet, so any document
+carrying those fields will always route to `needs_review` regardless of correctness — expected given the
+project's bias toward flagging over guessing, but worth naming so it isn't mistaken for a bug later.
+
+## 2026-08-05 — documentation pass: Synthdog-RTL verified, ADR-008, DATASETS, staleness sweep
+
+**Touched:** no INV directly · `Docs/DATASETS.md` (new),
+`Docs/decisions/ADR-008-synthetic-generation-is-a-component.md` (new),
+`Docs/decisions/ADR-002-two-stage-ocr.md` (amendment banner), `Docs/PROJECT_CONTEXT.md` §3 §7 §8,
+`Docs/ARCHITECTURE.md` §1 §2 §4, `Docs/EVAL_AND_GOLDEN_SET.md` §2 §4 §5, `Docs/INDEX.md`,
+`CodeBase/backend/CLAUDE.md`, `CodeBase/backend/.env.example`
+
+No code changed. Documentation only.
+
+**Did:** cloned Synthdog-RTL at `15e9d1f` and read all 528 lines rather than the README. Wrote
+ADR-008 (requested as 007 — that number was taken earlier the same day) and `DATASETS.md`. Swept
+every doc against the code as it now stands.
+
+**Learned / broke — four findings, three of which change what we thought.**
+
+**Synthdog-RTL does none of the three things it was being planned around.** No field boxes: the only
+geometry it computes is the page quad at `template.py:70`, and `save()` binds it and never writes
+it; per-token layers are destroyed by `Group(...).merge()` at `textbox.py:42`. No structured JSON:
+`keys=["text_sequence"]` at `template.py:99` — it emits Donut's `gt_parse` *envelope* around a
+single flat string, which is almost certainly why one source read it as "Donut-style JSON". Not even
+line-level: `label = " ".join(texts)` concatenates every textbox on the page. And no bidi at all —
+`get_display` is imported at `template.py:15` and never called, RTL is a right-to-left *word
+advance* that would reverse English word order in a mixed line, the shipped corpus has zero Latin
+characters, and the fonts are Nastaliq-only. **The `bidirectional: 0` in the configs is a shadow
+effect parameter**, which is the likeliest single cause of the three-way disagreement: it reads
+exactly like a text-direction switch.
+
+**The Qaari news dataset is missing the letter آ.** Entirely. Zero occurrences across 11 sampled
+rows while dozens of words require it — `مارشل رٹ` for `مارشل آرٹ`, `کسیجن` for `آکسیجن`, `رڈیننس`
+for `آرڈیننس`, `ئل` for `آئل`. ؤ (U+0624) looks affected too. This matters more than the
+contamination worry that prompted the check: a CER against these labels *rewards* dropping a common
+Urdu character, and if Qaari trained on them it has learned to drop it. Sample size is 11 rows and a
+full count was not run — that count is the first thing anyone using this corpus should do.
+
+**The contamination hypothesis was half wrong and the conclusion survived anyway.** The model card
+says the training set was 10,000 *synthetic* images; the news dataset is 35.9 K *real news*. They
+cannot be the same corpus. Recorded in `DATASETS` §4 as a conflict rather than resolved. But the
+card names **no evaluation set at all** for its headline 0.048 WER, so the number was never
+attributable regardless — which is a better reason than the one we started with.
+
+**Qaari yields no bounding boxes, and ADR-002 assumed it does.** ADR-002 says "whatever runs here
+has to yield boxes, not just text" and then selects Qaari, which is a LoRA adapter on Qwen2-VL-2B
+prompted for plain page text. The two-stage design survives — PaddleOCR supplies every box, Qaari
+replaces only the string inside one — but the unanticipated consequence is that **an Urdu region
+PaddleOCR fails to detect is invisible to the whole pipeline**, because nothing else produces
+regions. ADR-002 got a banner; its reasoning is untouched.
+
+**Staleness found and fixed:** `.env.example` pointed `QAARI_MODEL` at `NAMAA-Space/Qaari-0.1-Urdu`,
+an org that does not exist — the model is `oddadmix/Qaari-0.1-Urdu-OCR-VL-2B-Instruct`. Nobody would
+have noticed until the first Urdu run failed to download. `backend/CLAUDE.md`'s layout block
+predated `app/services/`, `app/main.py` and half of `app/db/`. `ARCHITECTURE` §2 listed four tables
+where there are six. `EVAL` §4's load test is specified against an L20 that does not exist, and §5
+describes a harness — `run_eval.py`, `scorers.py` — that has never been written, while
+`backend/CLAUDE.md` lists it as a runnable command. That last one is the sharpest: **no number this
+project produces is quotable yet under EVAL §1, because the thing that would make one quotable does
+not exist.**
+
+**Found already correct** and left alone: `ARCHITECTURE` §6 (six tables, both triggers, the TRUNCATE
+escape hatch, `seq` ordering, the no-money-column reasoning), `API_CONTRACT` 0.3.0 throughout
+including the computed `needs_review_count` and the dual-target contract suite, INV-1 … INV-6 in
+`PROJECT_CONTEXT` §6, `EXTRACTION_SCHEMA` 0.3.0, and every ADR's reasoning.
+
+**Next:** `DATASETS.md` §7 is a stub — the three research responses it was meant to merge were never
+supplied to me, so anything they found outside Hugging Face (Kaggle, university pages, LDC/ELRA,
+paper supplements) is missing. Paste them and §7 fills in. Separately, ADR-008 item 3 names FBR SRO
+1006(I)/2021 as the generator's field schema and **that SRO has not been read into this repository**
+— the mapping onto `EXTRACTION_SCHEMA.json` does not exist, so that item is a decision with no
+implementation behind it.
+
+## 2026-08-05 — the mock is now backed by a real app; contract suite runs against both
+
+**Touched:** INV-3, INV-4, INV-6 · `backend/app/db/{models,session,queries,seed,fixtures}.py` (new),
+`backend/app/db/migrations/` (new), `backend/app/{main.py,api/,core/,services/,export/,schemas/}`
+(new), `backend/docker-compose.yml` (new), `backend/alembic.ini` (new),
+`backend/tests/integration/` (new), `backend/tests/contract/conftest.py`,
+`backend/tests/mock_server.py`, `backend/pyproject.toml`, `backend/CLAUDE.md`,
+`Docs/ARCHITECTURE.md` §6, `Docs/API_CONTRACT.md` §2 §7 §9
+
+Three commits, plus one baseline commit that landed the previous sessions' work — HEAD was still at
+the scaffold, so nothing had a coherent tree to sit on.
+
+**Did:** Postgres 16 with six tables. INV-4 and INV-6 are **triggers**, not conventions: every
+`UPDATE`/`DELETE` on `extractions`, `corrections` and `audit_log` raises `restrict_violation`, and an
+`UPDATE` changing `documents.data_classification`, `storage_path` or `sha256` raises too. A
+`before_flush` listener raises first with a message naming the invariant, so the ORM path fails
+readably; both layers are tested separately. The current view — latest extraction plus newest
+correction per field — is one SQL statement.
+
+Nine real endpoints, JWT with three roles, uploads content-addressed on disk and `chmod 0444`.
+Enqueue is a stub as instructed. Contract suite parameterised over `mock` and `real`: **the same 36
+tests run against both, and `test_api_contract.py` was not edited by a single character.**
+
+**Learned / broke:** three things, all found by things failing rather than by reading.
+
+**"Latest" was a coin flip.** `ORDER BY created_at DESC, id DESC` looks obviously correct and is
+not: `now()` is *transaction start time*, so two rows written in one transaction tie exactly, and
+the tiebreak then falls to a random UUID. The current view would have returned an arbitrary one of
+two extractions, silently, with no error and no test failure — a wrong number reaching a billing
+sheet by way of a `bigint` nobody thought about. Ordering is now an `IDENTITY` sequence. This is the
+same family as the money-in-float rule: do not let a value that must be exact depend on a
+representation chosen for a different purpose.
+
+**`TRUNCATE` walks straight past both triggers.** Row-level triggers do not fire on truncate, so the
+append-only guarantee is only as strong as the grants. The test suite relies on this to reset
+between cases, which means the escape hatch is *in daily use* — it needs to be a revoked privilege
+in any real deployment, and that is now written into `ARCHITECTURE` §6 rather than left as a
+property of the code nobody would think to check.
+
+**One contract test cannot pass against the real app, and it should not.**
+`test_status_progresses_queued_to_complete` asserts an upload reaches `complete`. The mock does that
+on a fake clock; the real app cannot, because enqueue is a stub with no Celery behind it. The
+temptation was to weaken the assertion so both sides go green — which would have deleted the only
+test that will notice when the worker lands and does not work. It is skipped for `real` with the
+reason spelled out, and the skip is in `conftest.py`, not in the test file, so the target stays
+exactly as written.
+
+Also worth recording: the fixtures existed twice — once in `mock_server.py`, once as whatever the
+real app would seed. Running the suite against both would then have been comparing two copies of the
+same hand-maintained data and calling it agreement. They now come from one module,
+`app/db/fixtures.py`, which the mock imports and the seeder writes. `needs_review_count` was
+hardcoded `3/2/0` in the mock and had no definition anywhere; it is now defined in `API_CONTRACT`
+§7 and computed, which changed the fixture numbers to `6/4/0`.
+
+Smaller: `JWT_SECRET` defaulted to `change-me`, nine bytes, and PyJWT warned about it on every
+decode. The listing endpoint exposed `from_` rather than the contract's `from`.
+
+**Next:** two things the frontend dev needs, on top of 0.2.0 and 0.3.0 which he still has not been
+told about. **An uploaded document on the real server never leaves `queued`** — there is no worker,
+so the review screen has to be built against the three seeded fixture documents or against the mock.
+And the export endpoint renders inline inside the POST handler; it returns `202 queued` per the
+contract while having already finished, which is a lie the contract currently requires and which
+stops being one when Celery lands.
+
+Nothing in the pipeline is wired to any of this yet: `paddle.py` has still never run against a real
+model, and no extraction is ever produced by the application — every extraction in the database was
+put there by the seeder.
+
+## 2026-08-05 — first real pipeline stage: PaddleOCR wrapper and a synthesised degradation ladder
+
+**Touched:** INV-2 · `backend/app/pipeline/ocr/paddle.py` (new), `backend/tools/degrade.py` (new),
+`backend/tests/unit/test_degrade.py` (new), `backend/tests/unit/test_paddle_ocr.py` (new),
+`backend/pyproject.toml`, `backend/CLAUDE.md`, `Docs/ARCHITECTURE.md` §2 §4,
+`Docs/PROJECT_CONTEXT.md` §3, `Docs/EVAL_AND_GOLDEN_SET`.md §2
+
+Second entry today. The session was gated into two reviewable halves; the first is below.
+
+**Did:** `paddle.py` wraps PP-OCRv5 and returns `TextRegion`s — text, per-region confidence, bbox
+normalised to 0..1 in the shape of the schema's `source` object. No merge logic: Qaari and the merge
+are separate stages. The loader is lazy and injectable, so 22 unit tests run with a fake engine and
+need neither the model nor a GPU. `paddleocr` is an optional dependency group (`uv sync --group
+ocr`) rather than a default dependency; Pillow is a real one, for page size.
+
+`degrade.py` synthesises a 6-step ladder (L0 original .. L5 worst realistic scan): skew, contrast
+loss, Gaussian blur, downsample to 100–150 dpi, JPEG artefacts, in scan order. Deterministic per
+seed, jittered per level so one seed gives one reproducible sample and different seeds give
+different ones. CLI writes PNGs so no *further* JPEG loss is added on top of the modelled loss.
+CORD is clean and we have no degraded Latin invoices, so this is what makes the ≥ 25% degraded slice
+measurable at all.
+
+No CORD download, no OCR run — as instructed. 153 unit tests, 61 contract tests.
+
+**Learned / broke:** three things, two of them found by tests failing.
+
+**Edge sharpness is not monotonic across the ladder, and the reason matters.** L1 measured *higher*
+edge energy than L0 (67.2 vs 64.9). JPEG ringing around sharp black-on-white edges adds
+high-frequency detail, so at low degradation the artefacts add edge energy faster than blur removes
+it. Monotone loss only takes over from L2. This is exactly the shape of trap that would make a CER
+curve get misread later — "L1 scored better than L0, the ladder is broken" — so it is now two named
+tests rather than a footnote: one asserting the fall from L2 down, one asserting the non-monotonic
+top so that if it ever *becomes* monotone somebody has to decide that deliberately.
+
+**The jitter bands were wider than the gaps between levels.** ±25% on skew makes L4 (1.8° ± 0.45)
+overlap L5 (2.5° ± 0.63), so a seed could produce a level 5 less skewed than its level 4 — a ladder
+whose rungs cross. Caught by the monotonicity test on seed 0. The bands are now bounded by the
+tightest adjacent pair: skew ±15%, blur ±10%, contrast ±2%, quality ±4. A "deterministic given a
+seed" ladder is not the same claim as "ordered by severity", and only the second one is useful.
+
+Third: PNG stores resolution as pixels-per-metre, so a 110 dpi write reads back as 110.0074. Only a
+test assertion, but it is the same class of thing as money-in-float — a unit conversion that looks
+lossless and is not.
+
+**Next:** `paddle.py` has never been run against a real image or a real model — every test injects a
+fake engine, so the wrapper is verified against *the documented* PP-OCRv5 output shape, not the
+actual one. `rec_polys` / `rec_scores` / `rec_boxes` handling is the part most likely to be wrong,
+and it will show up as either an exception or an empty region list on first contact. Adeen is
+running it against real images and reporting CER; that run is the first real evidence any of this
+works. `evals/run_eval.py` does not exist yet, so the CER numbers from that run are **not quotable**
+under §1 of [[EVAL_AND_GOLDEN_SET]] — they are a diagnostic, and the harness is what makes them a
+measurement.
+
+## 2026-08-05 — classification moved onto the document record; profile stamped in `pipeline_version`
+
+**Touched:** INV-6, INV-3, INV-4 · `Docs/decisions/ADR-007-classification-on-the-document-record.md`
+(new), `Docs/EXTRACTION_SCHEMA.json` (0.2.0 → 0.3.0), `Docs/API_CONTRACT.md` (0.2.0 → 0.3.0),
+`Docs/PROJECT_CONTEXT.md` §6 §8 §10, `Docs/ARCHITECTURE.md` §1 §6 §7, `Docs/INDEX.md`,
+`Docs/decisions/ADR-006-two-deployment-profiles.md` (amendment banner only),
+`backend/app/db/documents.py` (new), `backend/app/pipeline/llm/client.py`,
+`backend/tests/unit/test_document_record.py` (new), `backend/tests/unit/test_llm_guard.py`,
+`backend/tests/mock_server.py`, `backend/tests/contract/test_api_contract.py`
+
+**Did:** `data_classification` is no longer an argument to `LLMClient.complete`. It is a field on a
+frozen `DocumentRecord`, set at upload, immutable after, defaulting to `restricted`; the guard reads
+it off the record. The argument is **removed, not kept as an override** — an override is the same
+defect with a better name. `reclassify()` returns a new record with a new `document_id` and refuses
+to reuse the old one. Third enum value renamed `customer` → `restricted` (ADR-007 argues the rename:
+`restricted` names the handling rule, which is the thing a *default* can honestly say; `customer`
+names a belief about contents, which a default cannot).
+
+Upload now **requires** `data_classification` — the choice is named in API_CONTRACT §2 rather than
+left implied. Both required-and-rejected and optional-with-a-default are default-deny, so it is not
+a safety difference; it is about where the human decision gets recorded. A default makes an uploader
+that never sends the field indistinguishable, in the table, from documents someone actually
+classified. Two new error codes: `INVALID_CLASSIFICATION` and `IMMUTABLE_FIELD`.
+
+`pipeline_version` gains a required `profile`. Schema to 0.3.0, mock fixtures and contract tests
+follow. 128 tests pass.
+
+**Learned / broke:** the previous session shipped a guard that fails closed on a *malformed*
+classification and called INV-6 enforced. It was not. Default-deny catches the typo and the missing
+value; it cannot catch a caller that confidently passes `"synthetic"` for a real invoice, and every
+call site was free to pass whatever it liked. The guard was load-bearing on the assumption that the
+argument arriving at it was correct — which is the assumption the guard existed to remove. This is
+the fourth time in this repo the same shape has appeared: a mechanism that checks *form* being read
+as a mechanism that checks *truth* (`cnic_digit_count`, boolean `gates[].passed`, the invented
+mrc/otc identity, now a validated argument standing in for a recorded decision).
+
+The tell was in the code's own shape and nobody looked at it: a function whose correctness depends
+on its caller has moved the problem, not solved it. Persisting the value does not make it *true* —
+a human can still classify a real invoice as synthetic at upload — but it makes the decision
+singular, attributable, and immutable, instead of re-made silently on every call.
+
+`ARCHITECTURE` §6 now carries the `NOT NULL DEFAULT 'restricted'` / no-`UPDATE` requirement for the
+`documents` column, because there is no DB layer yet — `app/db/` has no models, session or
+migrations — and this record is a frozen dataclass standing in for a table that does not exist. That
+is a gap worth naming rather than a design: the immutability is currently Python-level only.
+
+**Next — still the blocking one, and it is now two versions deep.** **The frontend dev has still not
+been told about 0.2.0 or 0.3.0.** Neither has been agreed by both owners, which §4 ground rule 4
+requires and which was already outstanding when 0.2.0 shipped. What he needs, in order:
+
+1. **0.2.0:** `gates[].passed` is gone; `gates[].result` is three-state; `format_only` renders as
+   unconfirmed, grouped with `failed`, never with `passed`.
+2. **0.3.0, upload:** `data_classification` is a **required** form field with three values. It is a
+   control the user fills in — hard-coding `"synthetic"` in the upload helper makes the form submit
+   and defeats INV-6 the first time a real document goes through.
+3. **0.3.0, results:** `pipeline_version.profile` is required and is part of a run's identity;
+   `schema_version` is `"0.3.0"`.
+
+A banner saying so is now at the top of `API_CONTRACT.md`; it comes off when he has read both and
+agreed, not when the code is written.
+
+## 2026-08-04 — ADR-006: two profiles, and INV-6 enforced in code
+
+**Touched:** INV-6 (new) · `Docs/decisions/ADR-006-two-deployment-profiles.md` (new),
+`Docs/PROJECT_CONTEXT.md` §3 §6 §8, `Docs/ARCHITECTURE.md` §1 §2 §7, `Docs/INDEX.md`,
+`backend/app/pipeline/llm/client.py` (new), `backend/tests/unit/test_llm_guard.py` (new)
+
+**Did:** recorded that there is no L20. `prototype` runs on an RTX 3060 Ti with both OCR models
+local and the LLM hosted; `production` is the L20 with all three local. Added INV-6 — a real PTCL
+document never reaches a hosted API — and enforced it: `assert_releasable` raises
+`HostedEndpointRefusedError` before the transport is invoked, default deny, so an absent or
+misspelled classification is refused rather than allowed. `LLMClient` also refuses to *construct*
+with `profile=production, endpoint=hosted`. 26 guard tests.
+
+Docs no longer claim hardware we do not have. `ARCHITECTURE.md` §1 carries a VRAM budget for both
+cards, explicitly labelled estimates rather than measurements. Removed three `.gitkeep` files from
+directories that now hold real code; the two under `evals/golden/` stay, since those directories
+are still empty and gitignored.
+
+**Learned / broke:** INV-6 is not like the other five. INV-1 through INV-5 are all *detectable
+after the fact* — a wrong number in Excel can be traced, an overwritten row shows in the audit
+trail, a bad IBAN fails its checksum on the next run. A customer CNIC sent to a hosted API produces
+no error, no failing test, and no log entry that says anything went wrong. There is no "after the
+fact" in which to catch it, which is why it is the one invariant that had to be a guard rather than
+a rule, and why the guard fails closed on unrecognised input rather than falling through.
+
+The realistic failure was never someone deciding to send customer data. It is someone testing the
+prototype with one real invoice to see whether it works, which is the obvious thing to do and takes
+one drag-and-drop.
+
+Also worth recording: the docs asserted an L20 that never existed, and every capacity statement
+built on it read as fact. The VRAM table replacing it is honest about being estimates — but it is
+the same class of claim, and it should be measured before anything is decided on it.
+
+**Next:** the profile is not yet recorded in `pipeline_version`, so two extractions of the same
+document under different profiles would compare as if equivalent — that is an
+`EXTRACTION_SCHEMA.json` change and therefore an `API_CONTRACT.md` bump, not done here.
+`data_classification` currently lives only as an argument to the LLM client; it is not persisted on
+the document record, so nothing yet stops a document being reclassified between runs. Both need
+deciding before the prototype ingests anything.
+
+## 2026-08-04 — invented MRC/OTC rule removed (ADR-005); mock server and contract tests land
+
+**Touched:** INV-1 · `backend/app/pipeline/gates/arithmetic.py`,
+`backend/tests/unit/test_arithmetic_gate.py`, `backend/tests/mock_server.py` (new),
+`backend/tests/contract/` (new), `Docs/decisions/ADR-005-mrc-otc-relationship-unspecified.md` (new),
+`Docs/ARCHITECTURE.md` §5, `Docs/API_CONTRACT.md` §9, `Docs/PROJECT_CONTEXT.md` §7 and §8,
+`Docs/INDEX.md`, `backend/pyproject.toml`
+
+**Did:** the mrc/otc sub-check no longer asserts `mrc + otc == subtotal`. It returns `format_only`
+for any well-formed value and `failed` only for a malformed amount. ADR-005 records why. Added the
+credit-note failure cases that were missing — a wrong negative total, a wrong negative line-item
+sum, and a sign error — so negatives are tested in both directions, not just the passing one.
+
+Mock server implements all nine endpoints of API_CONTRACT 0.2.0 with three fixture documents, one
+per review state. 60 tests: 39 unit, 21 contract. Contract tests validate against
+`EXTRACTION_SCHEMA.json` with a real JSON-Schema validator, plus a test that the validator rejects
+known-bad payloads — otherwise a validator that accepts everything also produces a green run.
+
+**Learned / broke:** the rule was written from the field names alone. `mrc` and `otc` sit next to
+`subtotal` in the schema, so `mrc + otc == subtotal` looked like arithmetic. It is a claim about how
+one company bills, and it is false for multi-month invoices, for contracts with no total, and for
+any pro-rated period. Three months at 20,000 plus a 5,000 connection fee is a correct document that
+the rule reported as broken.
+
+The dangerous direction was the other one. `arithmetic_reconciliation` can set `verified: true`, so
+whenever a document satisfied the invented identity by coincidence, a wrong number would have been
+marked confirmed. This is the third time the same failure has appeared in this repo — a claim about
+*shape* recorded as a claim about *correctness* — after `cnic_digit_count` and the boolean
+`gates[].passed`. The first two were in the schema. This one was in code, which is worse, because no
+document review catches it.
+
+It also survived one round of self-review: I flagged the assumption in a draft report that was never
+sent, and treated that as having raised it. A caveat that only exists in an unsent message is not a
+caveat. The tolerance question in the same task was correctly escalated *before* implementing; the
+business rule was not, and they are the same category of decision.
+
+**Next:** `ARCHITECTURE.md` §5 now carries an explicit warning against reinstating the rule, since
+"can fail but never pass" reads as an unfinished gate. `jsonschema` was added as a dev dependency —
+not recorded in `PROJECT_CONTEXT.md` §3, which describes product stack rather than test tooling;
+say if it should be. The frontend dev still has not been told about 0.2.0.
+
+## 2026-08-04 — arithmetic reconciliation gate implemented and verified
+
+**Touched:** INV-1 · `backend/app/pipeline/gates/arithmetic.py`, `backend/tests/unit/test_arithmetic_gate.py`, `Docs/JOURNAL.md`
+
+**Did:** Verified and completed the arithmetic reconciliation gate (`check_arithmetic`) and its unit tests. Renamed exception class `_MalformedAmount` to `_MalformedAmountError` to comply with Ruff N818 rule. Formatted files and ran pre-push checks (`ruff check`, `ruff format --check`, `pytest`).
+
+**Learned / broke:** `ruff check` flagged rule N818 (`_MalformedAmount` exception naming). All 34 tests passed with exact Decimal arithmetic throughout (no float, no arbitrary tolerances), missing operands mapped strictly to `FORMAT_ONLY`, and failure reporting per-check with exact field attribution (`affected_fields`).
+
+**Next:** None.
+
+---
 
 ## 2026-08-04 — ADR-004 supersedes ADR-003; API_CONTRACT 0.2.0; toolchain fixed
 

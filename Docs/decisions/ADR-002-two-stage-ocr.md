@@ -7,6 +7,16 @@ version: 1.0.0
 
 # ADR-002 — Two-stage OCR: PaddleOCR PP-OCRv5 then Qaari-0.1-Urdu
 
+> **Amended 2026-08-05 — one premise below is factually wrong.** The decision stands; the reasoning
+> is untouched, per the append-only rule. But this ADR says *"Whatever runs here has to yield boxes,
+> not just text"* and then selects Qaari. **Qaari does not yield boxes.** It is a PEFT/LoRA adapter
+> on Qwen2-VL-2B — a vision-language model prompted for plain page text — and it returns no
+> coordinates of any kind. The two-stage design survives because PaddleOCR supplies every box and
+> Qaari only replaces the *string* inside one; "merged by bounding box" means merged by
+> *PaddleOCR's* bounding box. See [[ARCHITECTURE]] §4 and [[DATASETS]] §4 for the verified detail.
+> The consequence this ADR did not anticipate: an Urdu region PaddleOCR fails to *detect* is
+> invisible to the entire pipeline, because nothing else produces regions.
+
 **Status:** accepted · **Decided:** date not recorded; extracted from the decision log in [[PROJECT_CONTEXT]] §8 on 2026-08-04
 **Supersedes:** —
 

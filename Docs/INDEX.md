@@ -1,7 +1,7 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-04
+last_reviewed: 2026-08-05
 version: 1.1.0
 ---
 
@@ -25,6 +25,7 @@ Frontmatter on each file carries `status`, `owner`, `last_reviewed`, `version`. 
 | [[API_CONTRACT]] | The exact frontend/backend boundary — endpoints, statuses, error envelope, mock server | Adeen & Frontend | Before writing or calling any endpoint. Both owners agree before it changes |
 | [[EXTRACTION_SCHEMA.json]] | The one shape an extraction result ever takes — source of truth for LLM output, DB rows, API responses, Excel columns | Adeen | Before changing any field. Changing it changes four things at once |
 | [[EVAL_AND_GOLDEN_SET]] | How we know it works — golden set rules, per-field metrics, release gates, test layers | Adeen | Before quoting any accuracy number, before a release, and when adding tests |
+| [[DATASETS]] | Every corpus we might train on or measure against, what each is actually worth, and the defects that are invisible from their documentation | Adeen | **Before quoting a number off any corpus**, before adopting a generator, and before assuming a published benchmark means what it says |
 | [[JOURNAL]] | What has actually happened, session by session — append-only, newest first | Adeen | At the end of every session to append, and at the start when you need to know what the last one left half-done |
 
 ## Decisions
@@ -39,6 +40,10 @@ Summary list in [[PROJECT_CONTEXT]] §8.
 | [[ADR-002-two-stage-ocr]] | Why two OCR engines (PaddleOCR + Qaari) and what the merge costs | Adeen | Touching OCR, script detection, bounding boxes, or chasing corrupted text |
 | [[ADR-003-deterministic-gates]] | Why validators outrank model confidence, and why gates never auto-correct — **superseded by ADR-004**, kept as record | Adeen | Only for history. Read ADR-004 instead |
 | [[ADR-004-format-only-gate-state]] | Why gate results are three-state, and why a format check (CNIC/NTN/STRN) can never set `verified: true` | Adeen | Writing any validator, deciding what `passed` is allowed to mean, or rendering gate results in the UI |
+| [[ADR-005-mrc-otc-relationship-unspecified]] | Why the MRC/OTC-to-total check asserts nothing, and why an unspecified rule inside a verifying gate is worse than no rule | Adeen | Tempted to infer a business rule from field names, or before writing any MRC/OTC validation |
+| [[ADR-006-two-deployment-profiles]] | Why there are two profiles, what runs where on 8 GB vs 48 GB, and why INV-6 forbids a real document ever reaching a hosted API — **INV-6 wording amended by ADR-007** | Adeen | **Before running the pipeline on any real document**, before changing the LLM endpoint, and before quoting a prototype accuracy number |
+| [[ADR-007-classification-on-the-document-record]] | Why `data_classification` lives on the document record rather than in a call argument, why it is immutable, why reclassification is a new document, and why the third value is `restricted` rather than `customer` | Adeen | Before touching the INV-6 guard, the upload endpoint, or the `documents` table — and any time an invariant looks like it depends on callers behaving |
+| [[ADR-008-synthetic-generation-is-a-component]] | Why synthetic document generation is a first-class component rather than tooling, why no public dataset makes it optional, and why the generator gets a version stamp | Adeen | Before building or changing the generator, and before treating any synthetic corpus as regenerable on a whim |
 
 ## Code
 

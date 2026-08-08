@@ -13,19 +13,24 @@ Package manager: `uv`. Lint/format: `ruff`. Types: `mypy` on `app/` (not on test
 ```
 backend/
 ├── app/
-│   ├── api/v1/          # routers — thin, no business logic
-│   ├── core/            # config, security, logging
-│   ├── db/              # models, session, migrations/
-│   ├── schemas/         # pydantic — generated from EXTRACTION_SCHEMA.json, not hand-written
+│   ├── main.py          # create_app() — routers, error handlers, trace_id middleware
+│   ├── api/
+│   │   ├── deps.py      # get_db, current_user, require_role
+│   │   └── v1/          # routers — thin, no business logic
+│   ├── core/            # config, security (JWT/pbkdf2), errors, storage, logging
+│   ├── db/              # models, session, queries, seed, fixtures, migrations/
+│   ├── services/        # business logic the routers delegate to
+│   ├── schemas/         # loaded from EXTRACTION_SCHEMA.json, not hand-written
 │   ├── pipeline/
 │   │   ├── ocr/         # paddle.py, qaari.py, merge.py
 │   │   ├── llm/         # client.py, prompts/, repair.py
 │   │   ├── gates/       # one module per validator
 │   │   └── orchestrator.py
-│   ├── workers/         # celery tasks
+│   ├── workers/         # celery tasks — not written yet, enqueue is a stub
 │   └── export/          # xlsx, csv, json
 ├── tests/
 │   ├── unit/  integration/  contract/  fixtures/
+├── tools/               # developer scripts, not shipped, not under mypy
 └── evals/               # see ../../Docs/EVAL_AND_GOLDEN_SET.md
 ```
 
@@ -35,6 +40,7 @@ backend/
 - **Pydantic models derive from `EXTRACTION_SCHEMA.json`.** Do not hand-maintain a parallel definition — they will drift. Generate or load, and test that they match.
 - **Each gate is one module, one pure function**, signature `(extraction) -> GateResult`. No I/O, no model calls. Trivially unit-testable, and that is the point.
 - **A gate returns three states, not two:** `passed`, `failed`, `format_only`. Format-only checks (CNIC, NTN, STRN) can never set `verified: true` — they have no checksum. Only IBAN mod-97, arithmetic reconciliation, and date parse can verify.
+- **The gate registry in `orchestrator.py` (`DEFAULT_GATES`) is explicit, not import-scanning.** A gate module that exists under `pipeline/gates/` but isn't added to that tuple never runs — add it there when it ships, in the same commit.
 - **Money is `Decimal` in Python, `NUMERIC` in Postgres, decimal string in JSON.** Never float, at any layer.
 - **Every DB write that represents an extraction or correction is an INSERT.** No UPDATE on those tables (INV-4).
 - **Celery tasks are idempotent and re-runnable.** Assume the worker will die mid-task, because it will.
@@ -45,17 +51,24 @@ backend/
 ## Commands
 
 ```bash
+docker compose up -d                       # postgres 16, required by the app and integration tests
+uv run alembic upgrade head                # apply migrations
+uv run python -m app.db.seed               # 3 users + the 3 review-state documents
 uv run uvicorn app.main:app --reload      # dev server
 uv run celery -A app.workers worker -l info
 uv run pytest tests/unit -q                # fast, run constantly
 uv run pytest tests/contract -q            # must pass before any push
+uv run pytest tests/integration -q         # needs postgres; skips cleanly without it
 uv run alembic revision --autogenerate -m ""
 uv run python evals/run_eval.py            # nightly; exits non-zero on gate failure
+uv sync --group ocr                        # installs paddleocr; not in the default sync
+uv run python tools/degrade.py IN OUT --seed 0   # 6-step degradation ladder from a clean image
 ```
 
 ## Before pushing
 
 1. `ruff check . && ruff format --check .`
 2. `uv run pytest tests/unit tests/contract -q` — quote the summary line
-3. Mock server still matches `API_CONTRACT.md`
+3. Mock server still matches `API_CONTRACT.md` — the contract suite proves it, by running
+   every test against both `tests/mock_server.py` and `app.main:app`
 4. Docs updated per [`../../Docs/AGENT_RULES.md`](../../Docs/AGENT_RULES.md) §2 (trigger table)
