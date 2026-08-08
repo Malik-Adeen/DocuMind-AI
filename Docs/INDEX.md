@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-05
-version: 1.1.0
+last_reviewed: 2026-08-08
+version: 1.2.0
 ---
 
 # INDEX.md — map of content
@@ -44,6 +44,7 @@ Summary list in [[PROJECT_CONTEXT]] §8.
 | [[ADR-006-two-deployment-profiles]] | Why there are two profiles, what runs where on 8 GB vs 48 GB, and why INV-6 forbids a real document ever reaching a hosted API — **INV-6 wording amended by ADR-007** | Adeen | **Before running the pipeline on any real document**, before changing the LLM endpoint, and before quoting a prototype accuracy number |
 | [[ADR-007-classification-on-the-document-record]] | Why `data_classification` lives on the document record rather than in a call argument, why it is immutable, why reclassification is a new document, and why the third value is `restricted` rather than `customer` | Adeen | Before touching the INV-6 guard, the upload endpoint, or the `documents` table — and any time an invariant looks like it depends on callers behaving |
 | [[ADR-008-synthetic-generation-is-a-component]] | Why synthetic document generation is a first-class component rather than tooling, why no public dataset makes it optional, and why the generator gets a version stamp | Adeen | Before building or changing the generator, and before treating any synthetic corpus as regenerable on a whim |
+| [[ADR-009-omission-is-invisible-to-the-gate-layer]] | Why a silently dropped field looks identical to a genuinely absent one at every gate, and why the fix is the eval harness's recall metric, not a new gate | Adeen | Before assuming a clean `gates` array means nothing is missing, and before writing W12's `run_eval.py`/`scorers.py` |
 
 ## Code
 

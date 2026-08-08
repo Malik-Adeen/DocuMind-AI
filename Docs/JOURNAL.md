@@ -28,6 +28,68 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-08 — temperature=0 confirms one defect, disproves another as noise; ADR-009; a stale merge conflict found committed on master
+
+**Touched:** no INV directly (eval/gate design questions only) · `Docs/decisions/ADR-009-omission-is-invisible-to-the-gate-layer.md`
+(new), `Docs/PROJECT_CONTEXT.md` §3 (merge-conflict resolution), §8, `Docs/INDEX.md`,
+`Docs/EVAL_AND_GOLDEN_SET.md` §3
+
+**Did:** `HostedChatTransport.temperature` already defaulted to `0.0` — the original baseline run was
+already at temperature 0, nothing needed changing there. Ran `tools/run_demo_extraction.py` twice
+more, fresh, to compare against that baseline and against each other.
+
+**Findings — one defect confirmed reproducible, one confirmed as real (not sampling) non-determinism:**
+
+- **Invoice 1's `mrc`/`otc`/`billing_terms` hallucination is fully deterministic**, byte-for-byte
+  identical across all three runs (baseline, and both new ones): `mrc: "25000.00"` copied from
+  `subtotal`, `otc: "4250.00"` copied from `tax`, `billing_terms` duplicated from `notes` — same
+  values, same (wrong) `source.raw_text` quotes, every time. This rules out sampling noise as the
+  explanation and points at the prompt or the model's prior, not luck.
+- **Invoice 3's dropped IBAN also survived all three runs** — the model never once extracted `iban`
+  for that document, including a run where it had a repair retry and still didn't produce it.
+  Reproducible, not noise.
+- **But invoice 3 was not deterministic overall.** The second fresh run failed outright:  both the
+  original attempt and its one repair retry emitted `"raw_text": null` for the absent `mrc`/`otc`/
+  `billing_terms` fields — literal JSON `null`, not a string and not an omitted key — which
+  `$defs/source` has always required to be a string when present. Schema validation rejected both
+  attempts, `complete_with_repair` exhausted, and the whole document failed with no extraction at
+  all. The baseline and the first fresh run both handled the identical absent-field case correctly,
+  quoting a short label (`"MRC"`, `"OTC"`, `"Billing Terms"`) as `raw_text` instead. Same prompt, same
+  model, same `temperature=0`, three different behaviours on the same document — confirming the
+  premise of the ask: this provider does not guarantee determinism at `temperature=0`.
+- Invoice 2 was clean and identical across all three runs, as before.
+
+**ADR-009 written**, per instruction, on the separate design question the dropped IBAN exposed:
+gates only ever see what's present in `fields`, so a field the model silently drops is
+indistinguishable, at the gate layer, from a field genuinely absent from the document —
+`iban_checksum` returned `format_only` both times, for opposite reasons, and nothing downstream could
+tell which. INV-1/INV-5 protect precision, not recall; closing this gap is W12's job (per-field
+recall and a present-vs-absent breakdown), not a new gate — inventing a "field X should be present"
+rule without ground truth is the same shape-as-truth mistake this repo has already made three times.
+`EVAL_AND_GOLDEN_SET.md` §3 amended accordingly: a precision-only eval report does not satisfy the
+harness's own stated purpose.
+
+**Learned / broke — a real problem found while starting this task, not caused by it:** before running
+anything, `git status`/`git log`/`git reflog` showed the branch had moved from `chore/agents-file` to
+`master` and picked up two squash-merged PRs, entirely outside this session — expected, that work
+belongs on GitHub. What was not expected: `Docs/PROJECT_CONTEXT.md` §3, as committed on `master` (and
+already pulled from `origin/master`), contained **literal, unresolved `<<<<<<< HEAD` / `=======` /
+`>>>>>>> origin/master` conflict markers**, mixing this repository's current, ADR-006/007-consistent
+stack description with a stale one describing a real L20 and a local-only LLM — hardware and a
+deployment shape ADR-006 explicitly says never existed. Somewhere in a PR's merge, a conflict was
+left unresolved and got committed (likely squashed) as literal file content rather than fixed before
+commit. Resolved by keeping the current, correct version and deleting the stale one and the markers;
+swept the rest of `Docs/` and `CodeBase/` for the same pattern and found nothing else. Worth a general
+lesson: `git status` reporting "clean" says nothing about whether a *committed* file still contains
+unresolved conflict text — that only shows up by reading the file.
+
+**Next:** prompt tuning is still explicitly deferred — nothing about the hallucination, the dropped
+IBAN, or the `raw_text: null` schema violation has been fixed. When tuning does start, the `raw_text:
+null` case is probably the cheapest first fix (the schema could simply allow `null` as well as
+omission, or the prompt could be more explicit that omitting the key is mandatory) — but that is a
+decision for the tuning session, not this one. W12 remains unwritten; ADR-009's requirement is not
+enforceable until it exists.
+
 ## 2026-08-08 — W4/W5: real hosted transport, real prompts, first live run — unimproved baseline
 
 **Touched:** INV-1, INV-2, INV-5, INV-6 · `backend/app/pipeline/llm/transport.py` (new),

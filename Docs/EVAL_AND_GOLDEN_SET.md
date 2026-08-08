@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-05
-version: 1.1.0
+last_reviewed: 2026-08-08
+version: 1.2.0
 ---
 
 # EVAL_AND_GOLDEN_SET.md
@@ -111,6 +111,17 @@ For each field, over the golden set:
 - **Recall** = correct extractions / times the field was actually present
 - **Hallucination rate** = predicted non-null where truth is `null` ← *watch this one*
 - **Calibration** = accuracy within each confidence decile
+
+**Precision alone does not catch a silently dropped field, and the harness must not report only
+precision.** A field the model never extracted is invisible to every gate — [[ADR-004-format-only-gate-state]]'s
+absent-field handling treats "genuinely not on the document" and "was on the document, the model
+missed it" identically, on purpose, because a gate has no ground truth to tell them apart
+([[ADR-009-omission-is-invisible-to-the-gate-layer]]). Eval is the only place that distinction is
+answerable, because it has the golden label. **`run_eval.py` must report per-field recall and a
+present-vs-absent breakdown** — for every field on every golden document, classify it as
+present-and-correct, present-and-wrong, present-and-missed (a recall miss), or genuinely-absent —
+using the `null`-means-absent / `"__illegible__"`-means-unreadable distinction §2 already specifies.
+A report that only prints precision would pass every one of these cases silently.
 
 Matching rules:
 - Money: exact string match after decimal normalisation.

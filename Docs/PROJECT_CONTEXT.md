@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-07
-version: 1.1.0
+last_reviewed: 2026-08-08
+version: 1.1.1
 ---
 
 # PROJECT_CONTEXT.md — Second Brain
@@ -33,7 +33,6 @@ Design consequence: **we prefer flagging a field as unverified over guessing it.
 | Layer | Choice | Notes |
 |---|---|---|
 | OCR (Latin) | PaddleOCR PP-OCRv5 | primary text + layout |
-<<<<<<< HEAD
 | OCR (Urdu) | `oddadmix/Qaari-0.1-Urdu-OCR-VL-2B-Instruct` | second stage, Urdu regions. A **PEFT adapter on Qwen2-VL-2B**, not a classic OCR engine: it returns page text and **no coordinates** ([[DATASETS]] §4) |
 | LLM | Qwen2.5-7B-Instruct | local on `production`; **hosted API on `prototype`** — see below |
 | Compute | **`prototype`: RTX 3060 Ti, 8 GB.** `production`: 1× L20, 48 GB GDDR6 | single node, no cluster |
@@ -63,13 +62,6 @@ calls a hosted LLM API, and is therefore restricted to documents that carry no c
 
 VRAM budgets are in [`ARCHITECTURE.md`](./ARCHITECTURE.md) §1. The data rule is **INV-6** in §6 and
 the reasoning is [[ADR-006-two-deployment-profiles]].
-=======
-| OCR (Urdu) | Qaari-0.1-Urdu | second stage, Urdu regions |
-| LLM | Qwen2.5-7B-Instruct | **local**, self-hosted |
-| Compute | 1× L20, 48 GB GDDR6 | single node, no cluster |
-| Validation | deterministic gates | IBAN mod-97 (the only verifying identifier gate), CNIC/NTN/STRN format checks, arithmetic reconciliation. Three-state results — see [[ADR-004-format-only-gate-state]] |
-| Synthetic data | SynthDoG + Faker `ur_PK` | training/eval corpus |
->>>>>>> origin/master
 
 **Explicitly NOT in scope right now:** Kubernetes, multi-tenant orgs, OAuth/SSO, MinIO/S3,
 mobile app, ERP connectors. If a doc or a code comment mentions these, it is out of date — delete it.
@@ -162,6 +154,7 @@ it with a new one.
 - [[ADR-006-two-deployment-profiles]] — `prototype` (RTX 3060 Ti, hosted LLM, public/synthetic documents only) and `production` (L20, all local, real documents). INV-6: a real PTCL document never reaches a hosted API. Scopes [[ADR-001-local-llm]] rather than reversing it.
 - [[ADR-007-classification-on-the-document-record]] — `data_classification` is persisted on the document record, set at upload and immutable, not passed per call. Third value renamed `customer` → `restricted`; reclassification is a new document. Amends INV-6's wording in ADR-006.
 - [[ADR-008-synthetic-generation-is-a-component]] — Synthetic document generation is a first-class component, not tooling: no public dataset of mixed Urdu/English business documents exists, so it is the only source of training and eval data for the core document type. Versioned and stamped; field schema from FBR SRO 1006(I)/2021.
+- [[ADR-009-omission-is-invisible-to-the-gate-layer]] — A field the LLM silently drops looks identical, at every gate, to a field genuinely absent from the document — neither INV-1 nor INV-5 protects recall, only precision. No gate can fix this without inventing a per-document-type field model; W12's eval harness must report per-field recall and an absent-vs-present breakdown to catch it at all.
 
 ## 9. Session protocol (for AI coding assistants)
 
