@@ -28,6 +28,85 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-08 — three fixes from the live baseline: schema-aware repair, a chosen prompt fix, an ADR-006 banner
+
+**Touched:** INV-2, INV-6 (indirectly, via the ADR-006 banner) · `backend/app/pipeline/orchestrator.py`
+(`_format_validation_error`, new), `backend/tests/unit/test_orchestrator.py` (two new tests),
+`backend/app/pipeline/llm/prompts/extract_v1.txt`, `backend/tests/unit/test_prompt_builder.py` (one
+new text-presence guard), `Docs/decisions/ADR-006-two-deployment-profiles.md` (banner only)
+
+**Did — Fix 1, schema-aware repair:** `_validate_model_output`'s error message used to read
+`['fields', 'mrc', 'source', 'raw_text']: None is not of type 'string'` — Python list-repr path,
+jsonschema's raw phrasing. `_format_validation_error` now produces `fields.mrc.source.raw_text must
+be of type string, got null` for `type` failures (dotted path, `json.dumps(instance)` so `None`
+reads as `null` inside an otherwise-JSON prompt) and falls through to jsonschema's own `.message` for
+every other validator kind. `repair.py` needed no change — `validate()`'s raised message already
+flows straight into the repair prompt via `str(exc)`. Two new orchestrator tests exercise the
+schema-valid-but-rejected repair/exhaust pair with the real validator, next to the existing
+malformed-JSON pair — "test both paths separately" from the request, now both covered.
+
+**Did — Fix 2, the mrc/otc/billing_terms hallucination, tried one at a time as instructed:**
+
+- **(a) few-shot example + explicit "don't infer from a nearby field" rule, added to
+  `extract_v1.txt`.** Live run, all three fixtures: invoice 1's `mrc`/`otc` went from hallucinated
+  (copied from subtotal/tax) to correctly `null` — **fixed**. Invoice 2's genuinely-present
+  `mrc`/`otc`/`iban` stayed correct — **no regression**, the thing asked to watch for. Invoice 3
+  unchanged (already correct). `billing_terms` was *not* fixed by (a) despite being named in the
+  instruction text — still duplicated from `notes`. One notable, not-fully-explained side effect:
+  invoice 3's IBAN, dropped in every prior run (baseline and both temperature=0 reps), was extracted
+  this run and its deliberately-bad checksum correctly failed `iban_checksum` — the scenario that
+  fixture was built to test, finally exercised live. Reported as observed, not claimed as caused by
+  (a) — the endpoint's non-determinism (documented in the entry below) means one run isn't enough to
+  attribute this to the prompt change specifically.
+- **(b) `description` fields added to `mrc`/`otc` in `Docs/EXTRACTION_SCHEMA.json`** (additive-only,
+  flows into the prompt automatically via `model_output_schema()`, no `schema_version` bump — a
+  `description` changes no validation behavior, confirmed via `Draft202012Validator.check_schema`
+  before and after). Live run: **invoice 1 failed outright**, twice out of three attempts across two
+  follow-up reps — a new failure mode never seen in any prior run (baseline, either temperature=0
+  rep, or candidate (a)): the model nested `line_items` *inside* `fields`, which
+  `additionalProperties: false` on `fields` correctly rejects. Fix 1's repair message was readable
+  (`fields: Additional properties are not allowed ('line_items' was unexpected)`) and repair was
+  attempted, but the model repeated the same structural mistake on the retry both times it happened.
+  On the one rep that succeeded, `mrc`/`otc` were correctly omitted — so (b) *can* fix the target
+  defect, but at an observed ~2-in-3 hard-failure rate on invoice 1 that (a) never showed once.
+- **Kept: (a). Reverted: (b).** Not because (b) can't work, but because (a) achieved the same fix
+  with zero observed failures against (b)'s unreliability — and (a) is the only one that even
+  attempts `billing_terms`, which neither fully solved. `billing_terms` hallucination is unresolved
+  and not otherwise in scope of this session; worth its own pass.
+- New test: `test_build_prompt_text_still_warns_against_inferring_mrc_otc_from_nearby_fields` in
+  `test_prompt_builder.py` — explicitly a text-presence guard against accidental deletion, not a
+  claim about model behavior. Live-run evidence is what proves behavior; that evidence lives in this
+  entry, not in a unit test's assertions.
+
+**Did — Fix 3:** amendment banner added to `ADR-006-two-deployment-profiles.md`, matching ADR-002's
+self-contained precedent — no new ADR file, Decision/Reason/Consequences sections untouched, frontmatter
+version left at `1.0.0` (same precedent ADR-007's banner set: banners don't bump the amended file's
+own version). Records that `temperature=0` does not give determinism on OpenRouter and is explicit
+that INV-6 and the DB's append-only structural guarantee are unaffected — what's undercut is the
+weaker, informal expectation that same-`pipeline_version` extractions are value-comparable, which was
+never INV-4's literal claim but is an assumption this finding disproves for the hosted-endpoint case.
+
+**Verification, evidence quoted:**
+```
+ruff check .            → All checks passed!
+ruff format --check .   → 51 files already formatted
+mypy                     → Success: no issues found in 30 source files
+pytest tests/unit tests/contract -q  → 270 passed, 1 skipped, 1 warning in 12.24s
+pytest tests/integration -q          → 41 passed in 2.54s
+```
+
+**Learned / broke:** the A/B procedure earned its keep — (b) looked like the smaller, safer change
+(pure metadata, no prompt bloat) and would have been the natural first choice on paper. Only running
+it live, and specifically re-running the one document that mattered when the first result looked
+odd, surfaced that it was the less reliable of the two. "Which change is smaller in the diff" and
+"which change is safer in practice" are not the same question for a stochastic dependency, and this
+session is the concrete case for why the instruction to test one variable at a time, live, mattered.
+
+**Next:** `billing_terms` hallucination remains open. Whether invoice 3's IBAN extraction under (a)
+was prompt-caused or coincidental non-determinism is unresolved — would need repeated reps to settle,
+not done here since it wasn't the target defect. Prompt/schema tuning beyond fix 2's kept change is
+still out of scope until asked for.
+
 ## 2026-08-08 — temperature=0 confirms one defect, disproves another as noise; ADR-009; a stale merge conflict found committed on master
 
 **Touched:** no INV directly (eval/gate design questions only) · `Docs/decisions/ADR-009-omission-is-invisible-to-the-gate-layer.md`

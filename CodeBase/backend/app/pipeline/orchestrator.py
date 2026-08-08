@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Protocol
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy.orm import Session
 
 from app.db.documents import DocumentRecord
@@ -88,10 +89,19 @@ def _run_ocr(document: DocumentRecord, ocr: OCRReader) -> list[TextRegion]:
     return found
 
 
+def _format_validation_error(error: ValidationError) -> str:
+    path = ".".join(str(part) for part in error.path) or "<root>"
+    if error.validator == "type":
+        expected = error.validator_value
+        expected_str = " or ".join(expected) if isinstance(expected, list) else str(expected)
+        return f"{path} must be of type {expected_str}, got {json.dumps(error.instance)}"
+    return f"{path}: {error.message}"
+
+
 def _validate_model_output(parsed: Mapping[str, Any]) -> None:
     errors = sorted(_model_output_validator().iter_errors(parsed), key=lambda e: list(e.path))
     if errors:
-        detail = "; ".join(f"{list(e.path)}: {e.message}" for e in errors)
+        detail = "; ".join(_format_validation_error(e) for e in errors)
         raise ExtractionFailedError(f"LLM output failed schema validation: {detail}")
 
 

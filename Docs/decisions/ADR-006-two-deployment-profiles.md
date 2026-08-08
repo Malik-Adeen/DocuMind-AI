@@ -17,6 +17,19 @@ version: 1.0.0
 > value is now named `restricted`, not `customer`. Read ADR-007 for the current wording. Nothing
 > else here is changed, and the reasoning is untouched.
 
+> **Amended 2026-08-08 — one assumption about `pipeline_version` comparability does not hold.** The
+> decision above stands; the reasoning is untouched. A live run against `qwen/qwen-2.5-7b-instruct`
+> (the prototype profile's hosted endpoint) showed `temperature=0` does not give determinism on
+> OpenRouter: the same document, same prompt, same `pipeline_version` produced three different
+> behaviours across three runs — two identical and correct, one that failed outright on a
+> schema-invalid `null` (see [[JOURNAL]] 2026-08-08). This does **not** touch INV-6 or this ADR's
+> `pipeline_version`-records-profile requirement, both of which are about which endpoint a document
+> may reach and how a run is labelled — that structural guarantee, enforced by the DB append-only
+> triggers ([[ARCHITECTURE]] §6: no `UPDATE`/`DELETE` on `extractions`, only new rows), is
+> unaffected. What does not hold is the weaker, informal expectation that two extractions sharing a
+> `pipeline_version` are also functionally or value-comparable — that was never this ADR's literal
+> claim, but this finding disproves it for the hosted-endpoint case. See [[JOURNAL]] for the run data.
+
 ## Context
 
 **There is no L20.** The card in [[PROJECT_CONTEXT]] §3 was written as though the hardware existed;

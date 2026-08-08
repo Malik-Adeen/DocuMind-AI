@@ -61,3 +61,12 @@ def test_build_prompt_forbids_inventing_values() -> None:
     prompt = build_prompt([region("PO Number: PO-2291")])
 
     assert "never invent" in prompt.lower() or "do not invent" in prompt.lower()
+
+
+def test_build_prompt_text_still_warns_against_inferring_mrc_otc_from_nearby_fields() -> None:
+    prompt = build_prompt([region("PO Number: PO-2291")])
+
+    assert "mrc" in prompt.lower()
+    assert "otc" in prompt.lower()
+    assert "billing_terms" in prompt.lower()
+    assert "nearby" in prompt.lower() or "infer" in prompt.lower()

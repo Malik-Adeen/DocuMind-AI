@@ -317,3 +317,40 @@ def test_llm_invalid_json_twice_exhausts_repair_and_raises() -> None:
         extract(document(), ocr=FakeOCR(regions()), llm=llm)
 
     assert len(spy.calls) == 2
+
+
+def _body_with_null_raw_text() -> str:
+    return json.dumps(
+        {
+            "document_type": {"value": "invoice", "confidence": 0.95},
+            "fields": {
+                "mrc": {
+                    "value": None,
+                    "confidence": 0.0,
+                    "verified": False,
+                    "source": {"origin": "llm_inferred", "raw_text": None},
+                }
+            },
+        }
+    )
+
+
+def test_schema_valid_but_rejected_output_is_repaired_once_then_succeeds() -> None:
+    fields = {"iban": llm_field(IBAN_VALID)}
+    llm, spy = hosted_llm_sequence([_body_with_null_raw_text(), llm_body(fields)])
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.result["fields"]["iban"]["verified"] is True
+    assert len(spy.calls) == 2
+    assert "fields.mrc.source.raw_text" in spy.calls[1]
+    assert "must be of type string, got null" in spy.calls[1]
+
+
+def test_schema_valid_but_rejected_output_twice_exhausts_repair_and_raises() -> None:
+    llm, spy = hosted_llm_sequence([_body_with_null_raw_text(), _body_with_null_raw_text()])
+
+    with pytest.raises(ExtractionFailedError, match="must be of type string, got null"):
+        extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert len(spy.calls) == 2
