@@ -30,3 +30,21 @@ def schema_version() -> str:
 @lru_cache
 def terminal_statuses() -> frozenset[str]:
     return frozenset(extraction_schema()["properties"]["status"]["enum"])
+
+
+@lru_cache
+def model_output_schema() -> dict[str, Any]:
+    schema = extraction_schema()
+    properties = schema["properties"]
+    return {
+        "$defs": schema["$defs"],
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["document_type", "fields"],
+        "properties": {
+            "document_type": properties["document_type"],
+            "language": properties["language"],
+            "fields": properties["fields"],
+            "line_items": properties["line_items"],
+        },
+    }

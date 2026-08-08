@@ -28,6 +28,85 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-08 — W4/W5: real hosted transport, real prompts, first live run — unimproved baseline
+
+**Touched:** INV-1, INV-2, INV-5, INV-6 · `backend/app/pipeline/llm/transport.py` (new),
+`backend/app/pipeline/llm/repair.py` (new), `backend/app/pipeline/llm/prompt_builder.py` (new),
+`backend/app/pipeline/llm/prompts/extract_v1.txt` (new — first real file in a directory that was
+`.gitkeep` only), `backend/app/schemas/extraction.py` (`model_output_schema()`, shared, non-circular),
+`backend/app/pipeline/orchestrator.py` (wired to the two above, replacing the placeholder prompt and
+direct-parse call), `backend/app/core/config.py` (`hosted_llm_*`, `llm_max_repair_retries`),
+`backend/.env.example`, `backend/tests/fixtures/invoices/` (three hand-authored synthetic invoices,
+new), `backend/tools/run_demo_extraction.py` (new, dev-only), `Docs/ARCHITECTURE.md` §2
+
+**Did:** `HostedChatTransport` is a thin OpenAI-compatible chat-completions caller (`httpx.Client`
+injected, `max_tokens` capped at 2000) sitting under the existing, untouched INV-6 guard —
+`assert_releasable` still runs inside `LLMClient.complete` before any transport call, and the guard's
+own tests were not touched. `complete_with_repair` retries exactly once on malformed JSON or a
+schema-validation failure, building a repair prompt that quotes the bad output and the error back to
+the model; a guard refusal or a raw transport error is deliberately **not** caught by that loop and
+propagates immediately — retries are for the model's output, not for infrastructure or INV-6. The
+prompt is a real file now (`prompts/extract_v1.txt`), interpolated with the OCR text and the *live*
+`EXTRACTION_SCHEMA.json` (via a new shared `model_output_schema()` in `schemas/extraction.py`, reused
+by both the prompt and the orchestrator's own validator) so the two can never disagree.
+
+Three English invoices written by hand as OCR-text fixtures (not rendered images — real image
+generation is ADR-008/W0, not this session): a simple one-off equipment invoice, an MRC/OTC recurring
+service invoice, and a deliberately noisy/misaligned layout carrying a CNIC, an NTN, and an IBAN whose
+checksum digit is wrong on purpose (`PK70BANK...`, the same known-bad IBAN used in
+`test_iban_gate.py`) — meant to exercise a live `iban_checksum` failure.
+
+**First live run, `qwen/qwen-2.5-7b-instruct` via OpenRouter, unmodified prompt, as instructed — not
+tuned:**
+
+- The configured slug (`Qwen/Qwen2.5-7B-Instruct`, copied from the `VLLM_MODEL` convention) does not
+  exist on OpenRouter; resolved by querying `/models` — the real slug is lowercase and hyphenated,
+  `qwen/qwen-2.5-7b-instruct`. Confirmed with a 10-token round trip before spending the real prompt.
+- All three JSON responses were valid on the **first** attempt — `complete_with_repair`'s retry path
+  never fired against a real model in this run, so it remains verified only against fakes.
+- **Invoice 1 hallucinated `mrc` and `otc`.** The document has no MRC/OTC billing at all (a one-time
+  equipment invoice), but the model copied `subtotal` into `mrc` and `tax` into `otc`, reusing the
+  same `source.raw_text` for both pairs — not a misread, an invented field association. The prompt
+  explicitly says to omit or null a field that is not present; the model did that correctly for
+  `mrc`/`otc` on invoice 3 (no MRC/OTC line there either) and incorrectly on invoice 1. Same missing
+  data, two different behaviors in the same run — worth naming as it happened, not smoothed over.
+  Invoice 1 also invented a `billing_terms` value by duplicating `notes`, another field genuinely
+  absent from the source.
+- **Invoice 3 dropped the IBAN entirely.** The line `Bank   IBAN :  PK70 BANK 0000 0012 3456 7890` is
+  present and was correctly read for every other adjacent field (CNIC, NTN, dense multi-column
+  layout survived intact) — but `iban` never appears in `fields`, so the gate that was supposed to be
+  exercised live (`iban_checksum` → `failed` on the deliberately-bad checksum) instead saw an absent
+  field and returned `format_only`. The scenario this fixture was built to test did not run.
+- **Invoice 2 was clean** — every field correct, including `mrc`/`otc`/`iban` all present and correct,
+  `iban_checksum` passed for real. This is the useful negative control: it rules out "the model can't
+  handle mrc/otc" as an explanation for invoice 1's hallucination — it's document-shape-dependent, not
+  universal.
+- Money formatting, decimal places, and every gate-computable arithmetic identity were correct on all
+  three documents — the model did not fabricate a wrong total anywhere it was checked. The 7B model
+  was reliable on arithmetic transcription and unreliable on knowing what wasn't there.
+- **Every document routed `needs_review`, on all three runs** — not because anything failed, but
+  because `po_number`, `customer_name`, `vendor_name`, `cnic`, `service_type`, dates, `notes` etc.
+  have no registered gate, so they can never be `verified: true`, and `extract()`'s routing rule
+  requires *every* populated field verified to reach `complete`. Expected given today's two-gate
+  registry (`iban_checksum`, `arithmetic_reconciliation`) — not a defect in this session's code, but
+  it means "complete" will stay rare until W9/W10's gates exist.
+- **Cost:** 3 calls, 10,097 tokens total, **$0.0030** for all three documents (OpenRouter-reported,
+  not estimated). `HostedChatTransport`'s `max_tokens=2000` cap was not hit by any response.
+
+**Learned / broke:** nothing was fixed on purpose. Per instruction, this is the unimproved baseline —
+prompt content, `source.raw_text` grounding (real OCR-substring quotes, not fabricated bounding
+boxes), and the retry-on-malformed-JSON path are all still exactly as first written. The two live
+defects (mrc/otc hallucination, dropped IBAN) and the routing-is-almost-always-`needs_review`
+consequence of sparse gate coverage are now recorded facts to prompt-tune or gate-build against next,
+not guesses.
+
+**Next:** prompt tuning against these three documents (still not the real generator — that's W0);
+decide whether `source.raw_text` should be cross-checked against the actual OCR text server-side
+(the model could quote text that was never in the document, and nothing currently catches that); the
+repair-retry path has never fired against a real model and should be forced once, deliberately, to
+confirm the second attempt behaves as designed; W9/W10's gates are what will make `complete` reachable
+at all for a normal document.
+
 ## 2026-08-07 — the orchestrator: first code that connects OCR, LLM and gates
 
 **Touched:** INV-1, INV-2, INV-4, INV-5, INV-6 · `backend/app/pipeline/orchestrator.py` (new),

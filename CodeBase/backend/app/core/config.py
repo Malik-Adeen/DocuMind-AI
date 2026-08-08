@@ -25,6 +25,11 @@ class Settings(BaseSettings):
 
     deployment_profile: str = "prototype"
 
+    hosted_llm_base_url: str = ""
+    hosted_llm_api_key: str = ""
+    hosted_llm_model: str = "Qwen/Qwen2.5-7B-Instruct"
+    llm_max_repair_retries: int = 1
+
     @model_validator(mode="after")
     def _refuse_the_dev_secret_outside_dev(self) -> Settings:
         if self.app_env != "dev" and self.jwt_secret == DEV_JWT_SECRET:

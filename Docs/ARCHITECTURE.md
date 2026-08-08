@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-07
-version: 1.2.0
+last_reviewed: 2026-08-08
+version: 1.3.0
 ---
 
 # ARCHITECTURE.md
@@ -122,6 +122,20 @@ isolation. `extract()` is a pure function, `DocumentRecord` in and an `Extractio
 OCR/LLM/gates all injected; `run_and_persist()` wraps it with a `Session` to write the `Extraction`
 row and update `documents.status`. It does not import Celery or know it will eventually run inside
 a worker — that wiring is separate and later.
+
+**Stage 4 now has a real hosted transport.** `app/pipeline/llm/transport.py`'s `HostedChatTransport`
+is a thin OpenAI-compatible chat-completions caller, injected as `LLMClient.transport` — it does not
+weaken the INV-6 guard, which still runs inside `LLMClient.complete` before any transport call.
+`app/pipeline/llm/repair.py`'s `complete_with_repair` wraps the call with **one retry** on malformed
+JSON or a schema-validation failure, then fails loudly (`RepairExhaustedError` →
+`ExtractionFailedError`) — a guard refusal or a transport error is never retried, only propagated.
+The prompt itself is a **file**, `app/pipeline/llm/prompts/extract_v1.txt`, loaded and interpolated by
+`app/pipeline/llm/prompt_builder.py`; it embeds the live schema (`EXTRACTION_SCHEMA.json`'s own
+`$defs`, via `app.schemas.extraction.model_output_schema()`) so the prompt cannot drift from the
+schema that validates its output. First live run against a real hosted Qwen2.5-7B-Instruct (three
+hand-authored synthetic invoices, unmodified prompt) is in [[JOURNAL]] 2026-08-08: it hallucinated
+`mrc`/`otc` values on one document that had neither field, and dropped an `iban` present in another
+— both instructive, neither fixed yet.
 
 Schema validation (Stage 5) runs on the LLM's **raw** JSON — `document_type` / `language` /
 `fields` / `line_items` only, checked against a schema built from `EXTRACTION_SCHEMA.json`'s own

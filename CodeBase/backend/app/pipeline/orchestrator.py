@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -17,8 +16,10 @@ from app.pipeline.gates.arithmetic import check_arithmetic
 from app.pipeline.gates.base import GateResult, GateState
 from app.pipeline.gates.iban import check_iban
 from app.pipeline.llm.client import LLMClient
+from app.pipeline.llm.prompt_builder import build_prompt
+from app.pipeline.llm.repair import RepairExhaustedError, complete_with_repair
 from app.pipeline.ocr.paddle import ENGINE_VERSION, TextRegion
-from app.schemas.extraction import extraction_schema, schema_version
+from app.schemas.extraction import extraction_schema, model_output_schema, schema_version
 
 OCR_URDU_VERSION = "qaari-0.1-urdu"
 
@@ -60,21 +61,7 @@ DEFAULT_GATES: tuple[GateRunner, ...] = (
 
 @lru_cache
 def _model_output_validator() -> Draft202012Validator:
-    schema = extraction_schema()
-    properties = schema["properties"]
-    model_schema = {
-        "$defs": schema["$defs"],
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["document_type", "fields"],
-        "properties": {
-            "document_type": properties["document_type"],
-            "language": properties["language"],
-            "fields": properties["fields"],
-            "line_items": properties["line_items"],
-        },
-    }
-    return Draft202012Validator(model_schema)
+    return Draft202012Validator(model_output_schema())
 
 
 @lru_cache
@@ -92,15 +79,6 @@ class ExtractionOutcome:
     gates: tuple[GateResult, ...]
 
 
-def build_prompt(regions: Sequence[TextRegion]) -> str:
-    lines = "\n".join(region.text for region in regions if region.text.strip())
-    return (
-        "Extract structured fields from this OCR text as JSON matching the "
-        "document_type/language/fields/line_items shape of EXTRACTION_SCHEMA.json.\n\n"
-        f"OCR TEXT:\n{lines}"
-    )
-
-
 def _run_ocr(document: DocumentRecord, ocr: OCRReader) -> list[TextRegion]:
     if not document.storage_path:
         raise OCRFailedError(f"document {document.document_id} has no storage_path to read")
@@ -108,23 +86,6 @@ def _run_ocr(document: DocumentRecord, ocr: OCRReader) -> list[TextRegion]:
     if not any(region.text.strip() for region in found):
         raise OCRFailedError(f"OCR produced no usable text for document {document.document_id}")
     return found
-
-
-def _run_llm(
-    document: DocumentRecord,
-    text_regions: Sequence[TextRegion],
-    llm: LLMClient,
-    build_prompt_fn: Callable[[Sequence[TextRegion]], str],
-) -> tuple[dict[str, Any], str]:
-    prompt = build_prompt_fn(text_regions)
-    raw = llm.complete(prompt, document=document)
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ExtractionFailedError(f"LLM output was not valid JSON: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ExtractionFailedError("LLM output JSON must be an object")
-    return parsed, prompt
 
 
 def _validate_model_output(parsed: Mapping[str, Any]) -> None:
@@ -195,10 +156,19 @@ def extract(
     llm: LLMClient,
     gates: Sequence[GateRunner] = DEFAULT_GATES,
     build_prompt_fn: Callable[[Sequence[TextRegion]], str] = build_prompt,
+    max_repair_retries: int = 1,
 ) -> ExtractionOutcome:
     text_regions = _run_ocr(document, ocr)
-    parsed, prompt = _run_llm(document, text_regions, llm, build_prompt_fn)
-    _validate_model_output(parsed)
+    prompt = build_prompt_fn(text_regions)
+    try:
+        parsed = complete_with_repair(
+            lambda p: llm.complete(p, document=document),
+            prompt,
+            validate=_validate_model_output,
+            max_retries=max_repair_retries,
+        )
+    except RepairExhaustedError as exc:
+        raise ExtractionFailedError(str(exc)) from exc
 
     fields: dict[str, Any] = dict(parsed.get("fields") or {})
     _reset_verification(fields)
@@ -246,6 +216,7 @@ def run_and_persist(
     llm: LLMClient,
     gates: Sequence[GateRunner] = DEFAULT_GATES,
     build_prompt_fn: Callable[[Sequence[TextRegion]], str] = build_prompt,
+    max_repair_retries: int = 1,
 ) -> Extraction:
     record = DocumentRecord(
         document_id=str(document.id),
@@ -254,7 +225,14 @@ def run_and_persist(
         uploaded_at=document.uploaded_at.isoformat() if document.uploaded_at else None,
         storage_path=document.storage_path,
     )
-    outcome = extract(record, ocr=ocr, llm=llm, gates=gates, build_prompt_fn=build_prompt_fn)
+    outcome = extract(
+        record,
+        ocr=ocr,
+        llm=llm,
+        gates=gates,
+        build_prompt_fn=build_prompt_fn,
+        max_repair_retries=max_repair_retries,
+    )
 
     extraction_id = uuid.uuid4()
     outcome.result["extraction_id"] = str(extraction_id)

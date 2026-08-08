@@ -1,0 +1,21 @@
+PTCL FIBER SOLUTIONS
+Invoice
+
+Invoice Number: INV-100234
+PO Number: PO-2291
+Vendor: PTCL Fiber Solutions (Pvt) Ltd
+Bill To: Karachi Textile Mills
+Effective Date: 2026-03-01
+
+Description                Qty   Unit Price   Line Total
+Fibre Link 100 Mbps          2     10000.00     20000.00
+Installation Charges         1      5000.00      5000.00
+
+Subtotal: 25000.00
+Tax (17%): 4250.00
+Total: 29250.00
+
+Currency: PKR
+Payment IBAN: PK36 SCBL 0000 0011 2345 6702
+
+Notes: Net 15 payment terms.

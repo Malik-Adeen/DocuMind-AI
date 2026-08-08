@@ -14,13 +14,13 @@ from app.pipeline.llm.client import (
     HostedEndpointRefusedError,
     LLMClient,
 )
+from app.pipeline.llm.prompt_builder import build_prompt
 from app.pipeline.ocr.paddle import TextRegion
 from app.pipeline.orchestrator import (
     DEFAULT_GATES,
     ExtractionFailedError,
     GateCoverageError,
     OCRFailedError,
-    build_prompt,
     extract,
 )
 
@@ -46,6 +46,17 @@ class Spy:
         return self.response
 
 
+class SequenceSpy:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.calls: list[str] = []
+
+    def __call__(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        index = min(len(self.calls) - 1, len(self.responses) - 1)
+        return self.responses[index]
+
+
 def regions(text: str = "PO Number: PO-2291\nTotal: 11700.00") -> list[TextRegion]:
     return [TextRegion(text=text, confidence=0.9, bbox=(0.1, 0.1, 0.5, 0.2), page=1)]
 
@@ -67,6 +78,17 @@ def document(
 
 def hosted_llm(response: str) -> tuple[LLMClient, Spy]:
     spy = Spy(response)
+    client = LLMClient(
+        profile=DeploymentProfile.PROTOTYPE,
+        endpoint=Endpoint.HOSTED,
+        model="fake-hosted-model",
+        transport=spy,
+    )
+    return client, spy
+
+
+def hosted_llm_sequence(responses: list[str]) -> tuple[LLMClient, SequenceSpy]:
+    spy = SequenceSpy(responses)
     client = LLMClient(
         profile=DeploymentProfile.PROTOTYPE,
         endpoint=Endpoint.HOSTED,
@@ -275,3 +297,23 @@ def test_null_valued_fields_do_not_block_completion() -> None:
     outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
 
     assert outcome.status == "complete"
+
+
+def test_malformed_llm_output_is_repaired_once_then_succeeds() -> None:
+    fields = {"iban": llm_field(IBAN_VALID)}
+    llm, spy = hosted_llm_sequence(["not valid json at all", llm_body(fields)])
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.result["fields"]["iban"]["verified"] is True
+    assert len(spy.calls) == 2
+    assert "not valid json at all" in spy.calls[1]
+
+
+def test_llm_invalid_json_twice_exhausts_repair_and_raises() -> None:
+    llm, spy = hosted_llm_sequence(["still not json", "still not json"])
+
+    with pytest.raises(ExtractionFailedError):
+        extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert len(spy.calls) == 2

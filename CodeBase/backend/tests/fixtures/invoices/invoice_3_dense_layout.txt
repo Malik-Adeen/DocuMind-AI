@@ -1,0 +1,29 @@
+    PTCL   ENTERPRISE  SERVICES
+================================
+Quotation  /  Invoice
+
+Vendor      : PTCL Enterprise Services
+Cust omer   : Faisalabad Garments Co.
+CNIC        : 33101-7654321-5
+NTN         : 1234567-8
+
+Po  Number     PO- 7715
+Invoice No.    INV- 20441
+
+Service  Type :  Managed  WAN  +  Firewall
+Effective Date  2026-04-10
+Expiry  Date    2027-04-09
+
+Item                    Qty    Unit Price    Line Total
+Firewall Appliance        1      80000.00      80000.00
+Managed WAN  Circuit       1      35000.00      35000.00
+
+Subtotal        115000.00
+Tax   (17  pct)   19550.00
+Total           134550.00
+
+Currency  PKR
+
+Bank   IBAN :  PK70 BANK 0000 0012 3456 7890
+
+Notes:  Includes  1 year  managed  support.  Pricing valid  30 days.
