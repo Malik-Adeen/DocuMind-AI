@@ -33,6 +33,7 @@ Design consequence: **we prefer flagging a field as unverified over guessing it.
 | Layer | Choice | Notes |
 |---|---|---|
 | OCR (Latin) | PaddleOCR PP-OCRv5 | primary text + layout |
+<<<<<<< HEAD
 | OCR (Urdu) | `oddadmix/Qaari-0.1-Urdu-OCR-VL-2B-Instruct` | second stage, Urdu regions. A **PEFT adapter on Qwen2-VL-2B**, not a classic OCR engine: it returns page text and **no coordinates** ([[DATASETS]] §4) |
 | LLM | Qwen2.5-7B-Instruct | local on `production`; **hosted API on `prototype`** — see below |
 | Compute | **`prototype`: RTX 3060 Ti, 8 GB.** `production`: 1× L20, 48 GB GDDR6 | single node, no cluster |
@@ -62,6 +63,13 @@ calls a hosted LLM API, and is therefore restricted to documents that carry no c
 
 VRAM budgets are in [`ARCHITECTURE.md`](./ARCHITECTURE.md) §1. The data rule is **INV-6** in §6 and
 the reasoning is [[ADR-006-two-deployment-profiles]].
+=======
+| OCR (Urdu) | Qaari-0.1-Urdu | second stage, Urdu regions |
+| LLM | Qwen2.5-7B-Instruct | **local**, self-hosted |
+| Compute | 1× L20, 48 GB GDDR6 | single node, no cluster |
+| Validation | deterministic gates | IBAN mod-97 (the only verifying identifier gate), CNIC/NTN/STRN format checks, arithmetic reconciliation. Three-state results — see [[ADR-004-format-only-gate-state]] |
+| Synthetic data | SynthDoG + Faker `ur_PK` | training/eval corpus |
+>>>>>>> origin/master
 
 **Explicitly NOT in scope right now:** Kubernetes, multi-tenant orgs, OAuth/SSO, MinIO/S3,
 mobile app, ERP connectors. If a doc or a code comment mentions these, it is out of date — delete it.
