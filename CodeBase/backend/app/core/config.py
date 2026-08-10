@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     hosted_llm_model: str = "Qwen/Qwen2.5-7B-Instruct"
     llm_max_repair_retries: int = 1
 
+    celery_broker_url: str = "redis://localhost:6379/1"
+    celery_result_backend: str = "redis://localhost:6379/2"
+    celery_task_always_eager: bool = True
+
     @model_validator(mode="after")
     def _refuse_the_dev_secret_outside_dev(self) -> Settings:
         if self.app_env != "dev" and self.jwt_secret == DEV_JWT_SECRET:
