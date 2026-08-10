@@ -28,6 +28,39 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-10 — repro harness persists raw N=20 runs; ADR-010 names the verbatim-label rule; earlier null/modal report retracted
+
+**Touched:** no INV · `backend/app/pipeline/llm/transport.py`, `backend/evals/repro.py`,
+`backend/evals/history/*.jsonl`, `backend/tests/unit/test_repro.py`,
+`Docs/decisions/ADR-010-mrc-otc-require-a-verbatim-field-label.md`, `Docs/AGENT_RULES.md` §2,
+`Docs/INDEX.md`, `Docs/PROJECT_CONTEXT.md` §8
+
+**Did:** built the repro harness with persisted per-rep raw responses — every rep's raw content, `id`,
+and `provider` (and, for the last two runs, the full response body) now land in
+`evals/history/*.jsonl` instead of only ever reaching an in-memory summary. `HostedChatTransport`
+gained optional `seed` and `provider_order` fields, sent as `seed` and
+`{"provider": {"order": [...], "allow_fallbacks": false}}` when set, with a new `complete_full()`
+method returning content plus the full body so `id`/`provider` survive to the caller;
+`__call__`'s existing `Callable[[str], str]` contract, and `client.py`, were left untouched. ADR-010
+written, naming the verbatim-label rule for `mrc`/`otc` without deciding an enforcement mechanism.
+
+**Learned / broke:**
+
+- `prompt_builder.py:24` injects `EXTRACTION_SCHEMA.json` into the prompt at runtime via
+  `model_output_schema()` — a `description` edit there is a prompt change, not a docs change, and
+  needs a live N≥20 check before landing, same as any other prompt change would.
+- `seed` was never echoed back in the response body across 21 calls spanning both OpenRouter
+  providers seen this session (Together, Phala) — no `seed` field, no stable `system_fingerprint`,
+  on any of them. Pinning the provider narrowed the `otc` null/`5000.00` flip (Together: 1/20; Phala:
+  5/20) but did not remove it. `ADR-006`'s determinism-banner amendment stands as written.
+- The earlier "16/20 null, 4/20 5000.00, 80% modal" report had no persisted run behind it — the
+  original harness never wrote raw responses anywhere, and no log or journal entry from that run
+  exists either. Retracted as unfounded, not reconciled against fresh data.
+
+**Next:** the frontend PR is blocked on API_CONTRACT 0.2.0 gate rendering — the frontend dev still has
+not confirmed reading it. Orphan `backend-celery_*` compose containers need checking before W7 lands.
+Zero golden labels still blocks every accuracy claim in `EVAL_AND_GOLDEN_SET`.
+
 ## 2026-08-08 — three fixes from the live baseline: schema-aware repair, a chosen prompt fix, an ADR-006 banner
 
 **Touched:** INV-2, INV-6 (indirectly, via the ADR-006 banner) · `backend/app/pipeline/orchestrator.py`

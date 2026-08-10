@@ -155,6 +155,7 @@ it with a new one.
 - [[ADR-007-classification-on-the-document-record]] — `data_classification` is persisted on the document record, set at upload and immutable, not passed per call. Third value renamed `customer` → `restricted`; reclassification is a new document. Amends INV-6's wording in ADR-006.
 - [[ADR-008-synthetic-generation-is-a-component]] — Synthetic document generation is a first-class component, not tooling: no public dataset of mixed Urdu/English business documents exists, so it is the only source of training and eval data for the core document type. Versioned and stamped; field schema from FBR SRO 1006(I)/2021.
 - [[ADR-009-omission-is-invisible-to-the-gate-layer]] — A field the LLM silently drops looks identical, at every gate, to a field genuinely absent from the document — neither INV-1 nor INV-5 protects recall, only precision. No gate can fix this without inventing a per-document-type field model; W12's eval harness must report per-field recall and an absent-vs-present breakdown to catch it at all.
+- [[ADR-010-mrc-otc-require-a-verbatim-field-label]] — A populated `mrc`/`otc` value is only valid if the document itself labels that specific field; a numerically plausible value copied from a differently-labeled line is a violation even when its quoted `source.raw_text` is a real, non-fabricated substring. Names the rule; does not decide an enforcement mechanism — retrying the already-reverted schema-description fix needs a live-fail check first.
 
 ## 9. Session protocol (for AI coding assistants)
 

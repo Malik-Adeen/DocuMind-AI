@@ -39,7 +39,7 @@ Find the row your change touches. Update the listed document in the same commit.
 | `backend/app/pipeline/**` — stages, orchestration, OCR, LLM call | [[ARCHITECTURE]] §2 (component map) and the affected stage section | — |
 | `backend/app/pipeline/gates/**` — any validator | [[ARCHITECTURE]] §5 (the gate list) | Reversing gate philosophy needs a new ADR superseding [[ADR-003-deterministic-gates]] |
 | `backend/app/api/**` — any endpoint, status, or error code | [[API_CONTRACT]] **and bump its version** | **Both owners agree first.** Tell the frontend dev — the contract is co-owned |
-| `backend/app/schemas/**` or any extracted field | [[EXTRACTION_SCHEMA.json]] | Changing it changes four things: LLM output, DB row, API response, Excel columns. Check all four |
+| `backend/app/schemas/**` or any extracted field | [[EXTRACTION_SCHEMA.json]] | Changing it changes four things: LLM output, DB row, API response, Excel columns. Check all four. `prompt_builder.py:24` injects `EXTRACTION_SCHEMA.json` into the prompt at runtime via `model_output_schema()` — a `description` edit is a prompt change, not a docs-only change, and requires a live N≥20 check before landing ([[ADR-010-mrc-otc-require-a-verbatim-field-label]]) |
 | `backend/app/export/**` — column order or format | [[EXTRACTION_SCHEMA.json]] (column order derives from field order) | — |
 | `backend/app/db/**` — models or migrations | [[ARCHITECTURE]] §6 (data model) | Extraction and correction tables are append-only (INV-4). No `UPDATE` |
 | `backend/evals/**` — harness, metrics, golden set rules | [[EVAL_AND_GOLDEN_SET]] | No accuracy number is quotable unless it came from this harness |
