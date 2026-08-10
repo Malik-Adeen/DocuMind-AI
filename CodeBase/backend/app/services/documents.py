@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -7,12 +9,13 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.errors import ApiError
 from app.core.storage import store_upload
 from app.db.models import AuditLog, Correction, Document, Extraction
 from app.db.queries import current_extraction, unverified_field_counts
 from app.schemas.extraction import field_names, terminal_statuses
+from app.workers.tasks import extract_document
 
 ACCEPTED_TYPES = frozenset({"application/pdf", "image/png", "image/jpeg", "image/tiff"})
 CLASSIFICATIONS = frozenset({"public", "synthetic", "restricted"})
@@ -101,9 +104,27 @@ def create_document(
     return document
 
 
+_extraction_threads: list[threading.Thread] = []
+
+
+def _run_extraction_soon(document_id: str) -> None:
+    time.sleep(0.05)
+    extract_document.delay(document_id)
+
+
 def enqueue_extraction(document: Document) -> None:
-    """Stub for the Celery hand-off. The document stays `queued` until a worker exists."""
-    return None
+    document_id = str(document.id)
+    if get_settings().celery_task_always_eager:
+        thread = threading.Thread(target=_run_extraction_soon, args=(document_id,), daemon=True)
+        _extraction_threads.append(thread)
+        thread.start()
+    else:
+        extract_document.delay(document_id)
+
+
+def join_extraction_threads(timeout: float = 5.0) -> None:
+    while _extraction_threads:
+        _extraction_threads.pop().join(timeout)
 
 
 def get_document(db: Session, document_id: str) -> Document:

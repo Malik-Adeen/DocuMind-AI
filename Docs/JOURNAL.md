@@ -28,6 +28,96 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-10 — first full real-path run: real OCR, real hosted LLM, real gates, 34.41s to `needs_review`
+
+**Touched:** no INV · `backend/pyproject.toml`, `backend/uv.lock` (`ocr` group pins
+`paddlepaddle==3.0.0`)
+
+**Did:** installed the `ocr` extra (`uv sync --group ocr`) and ran the real path end to end for
+the first time — Redis up, `celery -A app.workers worker -l info --pool solo` against it with
+`CELERY_TASK_ALWAYS_EAGER=false`, real `uvicorn`, a rendered PNG of `invoice_1_simple.txt`
+uploaded through `POST /api/v1/documents`. First attempt (`paddleocr>=3.0`'s resolved
+`paddlepaddle==3.3.1`) crashed inside PaddlePaddle's own oneDNN-backed new-executor —
+`NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+[pir::ArrayAttribute<pir::DoubleAttribute>]` — after successfully downloading model files from
+HuggingFace but before producing any OCR output. Pinning `paddlepaddle==3.0.0` avoided the crash.
+Re-ran: task received, real PaddleOCR ran, real `qwen/qwen-2.5-7b-instruct` call went out, real
+gates ran, document reached `"needs_review"` in **34.41s** wall time from upload to terminal
+status.
+
+**Learned / broke:** three things this run surfaced that no fixture-text or fake-LLM run could
+have:
+
+- `otc` came back `"5000.00"`, sourced from `"Installation Charges\n5000.00"` — the exact
+  verbatim-label violation [[ADR-010-mrc-otc-require-a-verbatim-field-label]] was written about,
+  now reproduced through a genuinely real OCR→LLM path rather than a fixture read directly as
+  text. The defect isn't fixture-specific; it survives real OCR noise.
+- `line_item_sum` failed for real: `"line items sum to 20000.00, subtotal is 25000.00"` — the
+  model extracted only the `Fibre Link 100 Mbps` line item and dropped `Installation Charges`
+  entirely from `line_items`, even though it separately (and wrongly) surfaced that same line's
+  value as `otc`. A dropped line item and a misattributed field from the same missing information,
+  in the same run — the gate caught the arithmetic consequence live, which is exactly what
+  `line_item_sum` is for.
+- Real PaddleOCR misreads appeared that no synthetic-text fixture run would ever produce:
+  `"Bill Tα Karachi Textile Mills"` (`To` → `Tα`) and `"PTCL Fiber Solutions (Pyt) Ltd"` (`Pvt` →
+  `Pyt`) — artifacts of Pillow's rendered font, not the pipeline, but a reminder that every
+  fixture-text run this session ran the LLM stage only, never the OCR stage, and OCR has its own
+  error surface layered on top.
+
+**Next:** `paddlepaddle==3.3.1`'s oneDNN crash was not root-caused inside PaddlePaddle itself —
+pinning to `3.0.0` was the smallest change that unblocked OCR here, not a diagnosis of why `3.3.1`
+fails on this machine specifically. `otc`'s verbatim-label violation and the dropped line item are
+both now confirmed live, not just diagnosed from static text — worth prioritizing over further
+infra work once prompt/schema tuning resumes, since [[ADR-010-mrc-otc-require-a-verbatim-field-label]]
+already named the rule and this run shows it still fails at the same rate under real conditions.
+
+## 2026-08-10 — W7: extract_document Celery task wired to the real orchestrator; a real bug found by running the real path
+
+**Touched:** no INV · `backend/app/workers/{__init__,celery_app,tasks}.py` (new),
+`backend/app/services/documents.py` (`enqueue_extraction` no longer a no-op),
+`backend/app/core/config.py` (`celery_broker_url`, `celery_result_backend`,
+`celery_task_always_eager`), `backend/pyproject.toml` (`celery.*` mypy override),
+`backend/tests/contract/conftest.py` (fake OCR/LLM factories installed for `real_app`,
+`MOCK_ONLY` emptied)
+
+**Did:** `extract_document` fetches the `Document`, sets `status="extracting"`, calls
+`run_and_persist` (the existing orchestrator, untouched) with OCR/LLM built from swappable
+module-level factories, and lands on a terminal status. `enqueue_extraction` dispatches through
+it instead of doing nothing. `celery_task_always_eager` **defaults to `True`** — no broker or
+worker is deployed anywhere yet ([[ADR-006-two-deployment-profiles]]) — so under the default,
+`test_status_progresses_queued_to_complete[real]` exercises in-process execution via a tracked
+background thread in `enqueue_extraction`, joined at test teardown before the next test's DB
+truncate, **not a real broker**. That thread only runs on the eager path; it is never reached
+when `celery_task_always_eager=False`.
+
+**The real path was verified manually, not just asserted:** `backend-redis-1` started, `celery -A
+app.workers worker -l info` run against it with `CELERY_TASK_ALWAYS_EAGER=false`, real `uvicorn`
+against real Postgres, a synthetic invoice (rendered PNG of `invoice_1_simple.txt`) uploaded
+through the real API. Worker log confirmed task receipt
+(`Task app.workers.extract_document[...] received`) and the document reached a terminal status —
+`"failed"`, because `paddleocr` is not installed in this environment (the same gap already named
+in the prior session's step 4 report), not a defect in this change.
+
+**Learned / broke:** that manual run caught a real bug the contract-test fakes never could —
+`ModuleNotFoundError` from the OCR loader is not an `OrchestratorError`, so the original `except
+OrchestratorError` in `extract_document` never fired, and the document was left stuck at
+`"extracting"` forever with no terminal status and no recorded error. `backend/CLAUDE.md`'s
+"assume the worker will die mid-task" line was not fully honored on the first pass. Fixed with a
+catch-all `except Exception` that sets `"failed"`, commits, logs, and re-raises so Celery still
+records the failure. `ruff`/`mypy`/`281 passed` reconfirmed clean after the fix, then the manual
+run repeated and reached `"failed"` cleanly instead of hanging.
+
+**Next:** the eager-thread mechanism stays in place — removing it would regress
+`test_status_progresses_queued_to_complete[real]` back to the earlier bug, since the contract
+suite has no Redis or worker process of its own. Making it unnecessary would mean giving the
+contract suite real broker/worker infrastructure, which is a bigger change than this session's
+scope and wasn't requested. `paddleocr` remains uninstalled here, so no real-OCR run has ever
+reached `"complete"` in this environment — only the fake-backed contract test has, and only
+because its fake extraction populates solely a gate-covered field (`iban`) by design (per
+`_needs_review`'s all-populated-fields-must-be-verified rule, `"complete"` is unreachable for any
+real document today given current gate coverage — the 2026-08-08 entry already found every real
+run routes to `needs_review`, and nothing here changes that).
+
 ## 2026-08-10 — hand-derived golden labels for the three synthetic fixtures; NTN has no schema field
 
 **Touched:** no INV · `backend/evals/golden/dev/labels/invoice_1_simple.json`,

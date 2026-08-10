@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -28,13 +29,58 @@ CONTRACT_DB_NAME = CONTRACT_URL.rsplit("/", 1)[-1]
 
 PER_TEST_TABLES = ("audit_log", "exports", "corrections", "extractions", "documents")
 
-MOCK_ONLY = {
-    "test_status_progresses_queued_to_complete": (
-        "simulated status progression is a property of the mock's fake clock. The real app "
-        "leaves an upload `queued` because enqueue is still a stub — no Celery worker exists "
-        "yet, so no upload can reach a terminal status by itself."
+MOCK_ONLY: dict[str, str] = {}
+
+FAKE_VALID_IBAN = "PK36SCBL0000001123456702"
+
+
+def _fake_extraction_json() -> str:
+    return json.dumps(
+        {
+            "document_type": {"value": "invoice", "confidence": 0.95},
+            "fields": {
+                "iban": {
+                    "value": FAKE_VALID_IBAN,
+                    "confidence": 0.95,
+                    "verified": False,
+                    "source": {"origin": "llm_inferred", "raw_text": "mock"},
+                }
+            },
+        }
     )
-}
+
+
+def _fake_transport(prompt: str) -> str:
+    time.sleep(0.15)
+    return _fake_extraction_json()
+
+
+def _fake_ocr_reader() -> Any:
+    from app.pipeline.ocr.paddle import TextRegion
+
+    class _FakeOCR:
+        def read(self, image_path: str, *, page: int = 1) -> list[TextRegion]:
+            return [TextRegion(text="mock", confidence=1.0, bbox=(0.0, 0.0, 1.0, 1.0), page=page)]
+
+    return _FakeOCR()
+
+
+def _fake_llm_client() -> Any:
+    from app.pipeline.llm.client import DeploymentProfile, Endpoint, LLMClient
+
+    return LLMClient(
+        profile=DeploymentProfile.PROTOTYPE,
+        endpoint=Endpoint.LOCAL,
+        model="fake-contract-test-model",
+        transport=_fake_transport,
+    )
+
+
+def _install_fake_worker_dependencies() -> None:
+    from app.workers import tasks as worker_tasks
+
+    worker_tasks.build_ocr_reader = _fake_ocr_reader
+    worker_tasks.build_llm_client = _fake_llm_client
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -110,6 +156,8 @@ def real_app(tmp_path_factory: pytest.TempPathFactory) -> FastAPI:
     with get_sessionmaker()() as db:
         seed_users(db)
 
+    _install_fake_worker_dependencies()
+
     from app.main import create_app
 
     return create_app()
@@ -160,6 +208,11 @@ def client(under_test: str, request: pytest.FixtureRequest) -> Iterator[TestClie
 
     with TestClient(application) as test_client:
         yield test_client
+
+    if under_test == "real":
+        from app.services.documents import join_extraction_threads
+
+        join_extraction_threads()
 
 
 def _login(client: TestClient, email: str) -> dict[str, str]:
