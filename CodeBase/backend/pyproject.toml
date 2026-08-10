@@ -32,6 +32,8 @@ dev = [
 ]
 ocr = [
     "paddleocr>=3.0",
+    # CPU build. GPU inference needs paddlepaddle-gpu from PaddlePaddle's CUDA index instead.
+    "paddlepaddle==3.0.0",
 ]
 
 [tool.uv]
