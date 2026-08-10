@@ -39,6 +39,6 @@ node_modules/
 # Leading **/ is required: the golden set lives at CodeBase/backend/evals/golden/,
 # and a pattern with an interior slash is anchored to this file's directory.
 **/evals/golden/**
-!**/evals/golden/dev/
-!**/evals/golden/sealed/
-!**/evals/golden/**/.gitkeep
+!**/evals/golden/*/
+!**/evals/golden/*/labels/
+!**/evals/golden/*/labels/**
