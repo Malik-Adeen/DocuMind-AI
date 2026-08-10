@@ -42,3 +42,4 @@ node_modules/
 !**/evals/golden/dev/
 !**/evals/golden/sealed/
 !**/evals/golden/**/.gitkeep
+!evals/golden/dev/labels/
