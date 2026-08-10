@@ -28,6 +28,44 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-10 — hand-derived golden labels for the three synthetic fixtures; NTN has no schema field
+
+**Touched:** no INV · `backend/evals/golden/dev/labels/invoice_1_simple.json`,
+`invoice_2_recurring_service.json`, `invoice_3_dense_layout.json` (new — content produced this
+session, files placed by Adeen; see Learned/broke)
+
+**Did:** hand-derived all 17 `EXTRACTION_SCHEMA.json` `fields` values for each of the three synthetic
+invoice fixtures, reading only the fixture text — no model run, no `evals/history/*.jsonl` consulted.
+Applied `ADR-010-mrc-otc-require-a-verbatim-field-label`: `mrc`/`otc` are `null` on invoice 1 and
+invoice 3 (no verbatim label in either document) and populated on invoice 2 (`MRC:`/`OTC:` both
+explicitly labeled). One field was flagged ambiguous rather than guessed — invoice 2 carries no
+explicit `Vendor:` label, only an unlabeled header (`PTCL Corporate Billing`); Adeen resolved it,
+choosing the header string as `vendor_name`. Dates normalized to ISO per
+[[EVAL_AND_GOLDEN_SET]] §3's matching rule (`01-Feb-2026` → `2026-02-01`, etc. — invoice 1 and 3 were
+already ISO in source). IBAN normalized (whitespace stripped, uppercased). Invoice 3's OCR-noise
+internal spaces in `po_number`/`invoice_number`/`service_type`/`notes` collapsed to single spaces as
+a transcription judgment call, not a value correction.
+
+**Learned / broke:** `EXTRACTION_SCHEMA.json`'s `fields` block has **no `ntn` or `strn` field**, even
+though the gate registry enum names `ntn_format_check` and `strn_format_check`
+(`EXTRACTION_SCHEMA.json` line 142) and `invoice_3_dense_layout.txt` carries a real NTN value
+(`1234567-8`). Those two gates can never fire on any document, real or synthetic, because nothing in
+the schema extracts a value for them to check — a gate exists with no field to feed it. Not fixed
+here, per instruction; recorded so it isn't mistaken for an oversight later, and so it's visible
+before anyone next touches the gate registry or NTN/STRN handling.
+
+Separately: `evals/golden/**` is Read/Edit/Write-denied for Claude Code sessions in
+`.claude/settings.json`. The three label files above could not be written directly this session —
+their content was handed to Adeen, who placed them. Worth naming as a positive result, not just an
+obstacle: `EVAL_AND_GOLDEN_SET` §2's held-out rule (nothing that might tune against golden data
+touches it casually) is enforced by that deny rule literally, and it held.
+
+**Next:** same open items as the entry above (frontend PR blocked on API_CONTRACT 0.2.0; orphan
+`backend-celery_*` compose containers to check before W7). Additionally: the `ntn`/`strn` schema gap
+means no golden label can ever score those two gates until the schema gains the fields — a second,
+more specific blocker on top of W12's harness still not existing to consume these three `dev` labels
+at all.
+
 ## 2026-08-10 — repro harness persists raw N=20 runs; ADR-010 names the verbatim-label rule; earlier null/modal report retracted
 
 **Touched:** no INV · `backend/app/pipeline/llm/transport.py`, `backend/evals/repro.py`,
