@@ -28,6 +28,49 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-10 — first full real-path run: real OCR, real hosted LLM, real gates, 34.41s to `needs_review`
+
+**Touched:** no INV · `backend/pyproject.toml`, `backend/uv.lock` (`ocr` group pins
+`paddlepaddle==3.0.0`)
+
+**Did:** installed the `ocr` extra (`uv sync --group ocr`) and ran the real path end to end for
+the first time — Redis up, `celery -A app.workers worker -l info --pool solo` against it with
+`CELERY_TASK_ALWAYS_EAGER=false`, real `uvicorn`, a rendered PNG of `invoice_1_simple.txt`
+uploaded through `POST /api/v1/documents`. First attempt (`paddleocr>=3.0`'s resolved
+`paddlepaddle==3.3.1`) crashed inside PaddlePaddle's own oneDNN-backed new-executor —
+`NotImplementedError: ConvertPirAttribute2RuntimeAttribute not support
+[pir::ArrayAttribute<pir::DoubleAttribute>]` — after successfully downloading model files from
+HuggingFace but before producing any OCR output. Pinning `paddlepaddle==3.0.0` avoided the crash.
+Re-ran: task received, real PaddleOCR ran, real `qwen/qwen-2.5-7b-instruct` call went out, real
+gates ran, document reached `"needs_review"` in **34.41s** wall time from upload to terminal
+status.
+
+**Learned / broke:** three things this run surfaced that no fixture-text or fake-LLM run could
+have:
+
+- `otc` came back `"5000.00"`, sourced from `"Installation Charges\n5000.00"` — the exact
+  verbatim-label violation [[ADR-010-mrc-otc-require-a-verbatim-field-label]] was written about,
+  now reproduced through a genuinely real OCR→LLM path rather than a fixture read directly as
+  text. The defect isn't fixture-specific; it survives real OCR noise.
+- `line_item_sum` failed for real: `"line items sum to 20000.00, subtotal is 25000.00"` — the
+  model extracted only the `Fibre Link 100 Mbps` line item and dropped `Installation Charges`
+  entirely from `line_items`, even though it separately (and wrongly) surfaced that same line's
+  value as `otc`. A dropped line item and a misattributed field from the same missing information,
+  in the same run — the gate caught the arithmetic consequence live, which is exactly what
+  `line_item_sum` is for.
+- Real PaddleOCR misreads appeared that no synthetic-text fixture run would ever produce:
+  `"Bill Tα Karachi Textile Mills"` (`To` → `Tα`) and `"PTCL Fiber Solutions (Pyt) Ltd"` (`Pvt` →
+  `Pyt`) — artifacts of Pillow's rendered font, not the pipeline, but a reminder that every
+  fixture-text run this session ran the LLM stage only, never the OCR stage, and OCR has its own
+  error surface layered on top.
+
+**Next:** `paddlepaddle==3.3.1`'s oneDNN crash was not root-caused inside PaddlePaddle itself —
+pinning to `3.0.0` was the smallest change that unblocked OCR here, not a diagnosis of why `3.3.1`
+fails on this machine specifically. `otc`'s verbatim-label violation and the dropped line item are
+both now confirmed live, not just diagnosed from static text — worth prioritizing over further
+infra work once prompt/schema tuning resumes, since [[ADR-010-mrc-otc-require-a-verbatim-field-label]]
+already named the rule and this run shows it still fails at the same rate under real conditions.
+
 ## 2026-08-10 — W7: extract_document Celery task wired to the real orchestrator; a real bug found by running the real path
 
 **Touched:** no INV · `backend/app/workers/{__init__,celery_app,tasks}.py` (new),
