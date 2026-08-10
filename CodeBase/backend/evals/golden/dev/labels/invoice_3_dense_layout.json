@@ -1,0 +1,20 @@
+{
+  "document_id": "invoice_3_dense_layout",
+  "po_number": "PO-7715",
+  "invoice_number": "INV-20441",
+  "customer_name": "Faisalabad Garments Co.",
+  "vendor_name": "PTCL Enterprise Services",
+  "cnic": "33101-7654321-5",
+  "iban": "PK70BANK0000001234567890",
+  "service_type": "Managed WAN + Firewall",
+  "effective_date": "2026-04-10",
+  "expiry_date": "2027-04-09",
+  "currency": "PKR",
+  "mrc": null,
+  "otc": null,
+  "subtotal": "115000.00",
+  "tax": "19550.00",
+  "total": "134550.00",
+  "billing_terms": null,
+  "notes": "Includes 1 year managed support. Pricing valid 30 days."
+}
