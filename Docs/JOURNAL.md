@@ -28,6 +28,53 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-10 — W7: extract_document Celery task wired to the real orchestrator; a real bug found by running the real path
+
+**Touched:** no INV · `backend/app/workers/{__init__,celery_app,tasks}.py` (new),
+`backend/app/services/documents.py` (`enqueue_extraction` no longer a no-op),
+`backend/app/core/config.py` (`celery_broker_url`, `celery_result_backend`,
+`celery_task_always_eager`), `backend/pyproject.toml` (`celery.*` mypy override),
+`backend/tests/contract/conftest.py` (fake OCR/LLM factories installed for `real_app`,
+`MOCK_ONLY` emptied)
+
+**Did:** `extract_document` fetches the `Document`, sets `status="extracting"`, calls
+`run_and_persist` (the existing orchestrator, untouched) with OCR/LLM built from swappable
+module-level factories, and lands on a terminal status. `enqueue_extraction` dispatches through
+it instead of doing nothing. `celery_task_always_eager` **defaults to `True`** — no broker or
+worker is deployed anywhere yet ([[ADR-006-two-deployment-profiles]]) — so under the default,
+`test_status_progresses_queued_to_complete[real]` exercises in-process execution via a tracked
+background thread in `enqueue_extraction`, joined at test teardown before the next test's DB
+truncate, **not a real broker**. That thread only runs on the eager path; it is never reached
+when `celery_task_always_eager=False`.
+
+**The real path was verified manually, not just asserted:** `backend-redis-1` started, `celery -A
+app.workers worker -l info` run against it with `CELERY_TASK_ALWAYS_EAGER=false`, real `uvicorn`
+against real Postgres, a synthetic invoice (rendered PNG of `invoice_1_simple.txt`) uploaded
+through the real API. Worker log confirmed task receipt
+(`Task app.workers.extract_document[...] received`) and the document reached a terminal status —
+`"failed"`, because `paddleocr` is not installed in this environment (the same gap already named
+in the prior session's step 4 report), not a defect in this change.
+
+**Learned / broke:** that manual run caught a real bug the contract-test fakes never could —
+`ModuleNotFoundError` from the OCR loader is not an `OrchestratorError`, so the original `except
+OrchestratorError` in `extract_document` never fired, and the document was left stuck at
+`"extracting"` forever with no terminal status and no recorded error. `backend/CLAUDE.md`'s
+"assume the worker will die mid-task" line was not fully honored on the first pass. Fixed with a
+catch-all `except Exception` that sets `"failed"`, commits, logs, and re-raises so Celery still
+records the failure. `ruff`/`mypy`/`281 passed` reconfirmed clean after the fix, then the manual
+run repeated and reached `"failed"` cleanly instead of hanging.
+
+**Next:** the eager-thread mechanism stays in place — removing it would regress
+`test_status_progresses_queued_to_complete[real]` back to the earlier bug, since the contract
+suite has no Redis or worker process of its own. Making it unnecessary would mean giving the
+contract suite real broker/worker infrastructure, which is a bigger change than this session's
+scope and wasn't requested. `paddleocr` remains uninstalled here, so no real-OCR run has ever
+reached `"complete"` in this environment — only the fake-backed contract test has, and only
+because its fake extraction populates solely a gate-covered field (`iban`) by design (per
+`_needs_review`'s all-populated-fields-must-be-verified rule, `"complete"` is unreachable for any
+real document today given current gate coverage — the 2026-08-08 entry already found every real
+run routes to `needs_review`, and nothing here changes that).
+
 ## 2026-08-10 — hand-derived golden labels for the three synthetic fixtures; NTN has no schema field
 
 **Touched:** no INV · `backend/evals/golden/dev/labels/invoice_1_simple.json`,
