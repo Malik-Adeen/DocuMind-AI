@@ -1,0 +1,165 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 216 45% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 217 33% 9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 217 33% 9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 157 23% 44%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 215 25% 15%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 215 25% 14%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 157 23% 20%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 25% 16%;
+    --input: 215 25% 16%;
+    --ring: 157 23% 44%;
+
+    --radius: 0.5rem;
+
+    /* Legacy compatibility variables */
+    --color-primary: #588B76;
+    --color-primary-dark: #3F6957;
+    --color-primary-light: #7FA692;
+    --color-secondary: #D0DED8;
+    --color-secondary-light: #1E2B24;
+    --color-background: #0B111A;
+    --color-surface: #111A24;
+    --color-surface-secondary: #162230;
+    --color-border: #1E2D3D;
+    --color-text-primary: #FFFFFF;
+    --color-text-secondary: #94A3B8;
+    --color-text-muted: #64748B;
+    --color-success-bg: #064E3B;
+    --color-success-text: #34D399;
+    --glass-bg: 17, 26, 36;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Custom Glassmorphism Card Style */
+.glass-card {
+  background-color: rgba(var(--glass-bg), 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--color-border);
+  box-shadow: 0px 4px 20px rgba(0, 0, 0, 0.25);
+}
+
+/* Custom Shimmer/AI Indicators */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.03) 25%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.03) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite linear;
+}
+
+/* Webkit Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(3, 20, 39, 0.1);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* Floating Animations for Login artwork */
+@keyframes floatSlow {
+  0%, 100% { transform: translateY(-15px) rotate(-12deg); }
+  50% { transform: translateY(-5px) rotate(-10deg); }
+}
+.animate-floatSlow {
+  animation: floatSlow 6s ease-in-out infinite;
+}
+
+@keyframes floatFast {
+  0%, 100% { transform: translate(60px, 35px) rotate(6deg); }
+  50% { transform: translate(60px, 45px) rotate(8deg); }
+}
+.animate-floatFast {
+  animation: floatFast 4s ease-in-out infinite;
+}
+
+/* Laser sweep animations */
+@keyframes laser {
+  0% { top: 0%; opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+.animate-laser {
+  animation: laser 4s infinite linear;
+}
+
+@keyframes laserFast {
+  0% { top: 5%; opacity: 0; }
+  15% { opacity: 1; }
+  85% { opacity: 1; }
+  100% { top: 95%; opacity: 0; }
+}
+.animate-laserFast {
+  animation: laserFast 3s infinite linear;
+}
+
+/* Fade In animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Media preference for reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .animate-floatSlow,
+  .animate-floatFast,
+  .animate-laser,
+  .animate-laserFast,
+  .animate-fadeIn {
+    animation: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}

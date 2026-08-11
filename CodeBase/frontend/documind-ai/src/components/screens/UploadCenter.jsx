@@ -1,0 +1,193 @@
+import React, { useState, useRef } from 'react';
+import { uploadDocument, ApiError } from '../../api/client';
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { UploadCloud, FileUp, FileCheck, AlertCircle, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
+
+export default function UploadCenter({ onAddDocumentToQueue }) {
+  const [uploads, setUploads] = useState([]);
+  const [dragging, setDragging] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const fileInputRef = useRef(null);
+
+  const formatSize = (bytes) => (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+
+  const submitFile = async (file) => {
+    setUploadError('');
+
+    const uploadId = Date.now();
+    const pendingUpload = {
+      id: uploadId,
+      name: file.name,
+      size: formatSize(file.size),
+      status: 'uploading',
+      error: null,
+      type: file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'image',
+    };
+    setUploads((prev) => [pendingUpload, ...prev]);
+
+    try {
+      // Default classification 'restricted' per backend contract (no UI control added per directive)
+      const response = await uploadDocument(file, 'restricted');
+      setUploads((prev) =>
+        prev.map((item) =>
+          item.id === uploadId
+            ? { ...item, status: response.status, document_id: response.document_id }
+            : item
+        )
+      );
+      if (onAddDocumentToQueue) {
+        onAddDocumentToQueue(response);
+      }
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Upload failed.';
+      setUploadError(message);
+      setUploads((prev) =>
+        prev.map((item) =>
+          item.id === uploadId ? { ...item, status: 'failed', error: message } : item
+        )
+      );
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      submitFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      submitFile(e.target.files[0]);
+    }
+    e.target.value = '';
+  };
+
+  const handleBrowseClick = (e) => {
+    e.stopPropagation();
+    fileInputRef.current?.click();
+  };
+
+  return (
+    <div className="flex flex-col gap-6 w-full max-w-5xl mx-auto p-4 md:p-6 lg:p-8 animate-fadeIn">
+      <div>
+        <h2 className="font-headline-lg text-2xl font-bold text-foreground">Upload Center</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Securely ingest business documents for AI analysis, OCR layout parsing, and field extraction.
+        </p>
+      </div>
+
+      {uploadError && (
+        <Alert variant="destructive">
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>{uploadError}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Hidden file input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        className="hidden"
+        accept=".pdf,.png,.jpg,.jpeg,.tiff"
+      />
+
+      {/* Drag & Drop Upload Zone */}
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={handleBrowseClick}
+        className={`relative rounded-xl p-10 border-2 border-dashed flex flex-col items-center justify-center text-center min-h-[280px] cursor-pointer group transition-all duration-200 ${
+          dragging
+            ? 'border-primary bg-primary/10 scale-[0.99] shadow-inner'
+            : 'border-border/60 hover:border-primary/60 bg-card/40 hover:bg-card/70'
+        }`}
+      >
+        <div className="p-4 rounded-full bg-primary/10 text-primary mb-4 group-hover:scale-110 transition-transform duration-200">
+          <UploadCloud className="w-10 h-10" />
+        </div>
+        <h3 className="font-headline-md text-base font-semibold text-foreground mb-1">
+          {dragging ? 'Drop the document file here' : 'Drag and drop document files here'}
+        </h3>
+        <p className="text-xs text-muted-foreground mb-5">
+          or click anywhere to browse from your device
+        </p>
+        <Button variant="outline" size="sm" onClick={handleBrowseClick} className="gap-2 mb-6">
+          <FileUp className="w-4 h-4" />
+          Browse Files
+        </Button>
+        <div className="flex items-center gap-2 text-[11px] font-label-md text-muted-foreground">
+          <span>Supported formats:</span>
+          <Badge variant="outline" className="text-[10px] uppercase">PDF</Badge>
+          <Badge variant="outline" className="text-[10px] uppercase">PNG</Badge>
+          <Badge variant="outline" className="text-[10px] uppercase">JPG</Badge>
+          <Badge variant="outline" className="text-[10px] uppercase">TIFF</Badge>
+        </div>
+      </div>
+
+      {/* Upload History Card */}
+      <Card>
+        <CardHeader className="py-4 border-b border-border/40 bg-muted/20">
+          <div className="flex justify-between items-center">
+            <CardTitle className="text-sm font-semibold">Session Upload History</CardTitle>
+            <span className="text-xs font-label-md text-muted-foreground">Ingestion Log</span>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0 divide-y divide-border/20">
+          {uploads.length === 0 ? (
+            <div className="py-10 text-center text-muted-foreground text-xs">
+              No files uploaded in this session yet.
+            </div>
+          ) : (
+            uploads.map((upload) => (
+              <div key={upload.id} className="p-4 flex items-center gap-4 hover:bg-muted/10 transition-colors">
+                <div className="p-2.5 rounded-lg bg-muted/40 text-muted-foreground">
+                  {upload.type === 'pdf' ? <FileText className="w-5 h-5 text-primary-light" /> : <ImageIcon className="w-5 h-5 text-accent-foreground" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="font-label-md text-xs font-semibold text-foreground truncate pr-4">{upload.name}</span>
+                    {upload.status === 'uploading' ? (
+                      <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                    ) : upload.status === 'failed' ? (
+                      <Badge variant="destructive">Failed</Badge>
+                    ) : (
+                      <Badge variant="success" className="gap-1">
+                        <FileCheck className="w-3 h-3" />
+                        {upload.status}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {upload.status === 'failed' ? (
+                      <span className="text-destructive font-label-md">{upload.error}</span>
+                    ) : upload.status === 'uploading' ? (
+                      'Uploading document stream…'
+                    ) : (
+                      `${upload.size} • document_id: ${upload.document_id}`
+                    )}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
