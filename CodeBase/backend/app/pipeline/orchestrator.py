@@ -258,5 +258,6 @@ def run_and_persist(
     )
     session.add(row)
     document.status = outcome.status
+    document.document_type = outcome.result["document_type"]["value"]
     session.commit()
     return row

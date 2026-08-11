@@ -190,13 +190,13 @@ function LineItemsSection({ lineItems }) {
 
 export default function DocumentReview({ documentId, onBack }) {
   const [extraction, setExtraction] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(documentId));
   const [error, setError] = useState(null);
   const [notReady, setNotReady] = useState(false);
 
   const [fileUrl, setFileUrl] = useState(null);
   const [fileType, setFileType] = useState(null);
-  const [fileLoading, setFileLoading] = useState(false);
+  const [fileLoading, setFileLoading] = useState(() => Boolean(documentId));
   const [fileError, setFileError] = useState(null);
 
   useEffect(() => {
