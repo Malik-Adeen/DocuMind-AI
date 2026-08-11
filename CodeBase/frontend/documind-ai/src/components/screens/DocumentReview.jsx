@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { getExtraction, getDocumentFile, ApiError } from '../../api/client';
+import { getExtraction, getDocumentFile, correctExtraction, ApiError } from '../../api/client';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
@@ -12,10 +13,12 @@ import {
   HelpCircle,
   ArrowLeft,
   ShieldCheck,
+  UserCheck,
   AlertCircle,
   Loader2,
   SearchX,
   Download,
+  Save,
 } from 'lucide-react';
 
 const EXTENSION_BY_TYPE = {
@@ -57,6 +60,10 @@ function confidenceBadgeVariant(confidence) {
   return 'destructive';
 }
 
+const MONEY_FIELDS = new Set(['mrc', 'otc', 'subtotal', 'tax', 'total']);
+const MONEY_PATTERN = /^-?[0-9]+\.[0-9]{2}$/;
+const EMPTY_FIELD = { value: null, confidence: 0, verified: false, gate: null, gate_error: null, source: null };
+
 function FieldRow({ label, field }) {
   if (!field) return null;
   const confVariant = confidenceBadgeVariant(field.confidence);
@@ -92,6 +99,53 @@ function FieldRow({ label, field }) {
       {field.gate_error && (
         <p className="text-destructive text-[11px] font-label-md mt-1">{field.gate_error}</p>
       )}
+    </div>
+  );
+}
+
+function EditableFieldRow({ fieldKey, label, field, value, onChange, validationError }) {
+  const confVariant = confidenceBadgeVariant(field.confidence);
+  const isMoney = MONEY_FIELDS.has(fieldKey);
+  return (
+    <div className="group space-y-1.5 p-3 rounded-lg bg-muted/20 border border-border/30 hover:border-border/60 transition-colors">
+      <div className="flex flex-wrap justify-between items-center gap-2">
+        <label className="font-body-sm text-xs font-medium text-muted-foreground" htmlFor={`field-${fieldKey}`}>{label}</label>
+        {/* INVARIANT 2: Confidence and Verification are separate signals with separate visual badges */}
+        <div className="flex items-center gap-1.5">
+          <Badge variant={confVariant} className="text-[10px] py-0 px-1.5 font-label-md">
+            Score: {Math.round(field.confidence * 100)}%
+          </Badge>
+          {field.verified ? (
+            <Badge variant="success" className="text-[10px] py-0 px-1.5 font-label-md" title="Confirmed by a deterministic gate or a human correction">
+              <ShieldCheck className="w-3 h-3 text-emerald-400" />
+              Verified
+            </Badge>
+          ) : (
+            <Badge variant="unconfirmed" className="text-[10px] py-0 px-1.5 font-label-md" title="Not confirmed by a deterministic gate">
+              <HelpCircle className="w-3 h-3 text-slate-400" />
+              Unverified
+            </Badge>
+          )}
+          {field.source?.origin === 'human' && (
+            <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-label-md" title="Corrected by a human reviewer">
+              <UserCheck className="w-3 h-3" />
+              Human
+            </Badge>
+          )}
+        </div>
+      </div>
+      <Input
+        id={`field-${fieldKey}`}
+        value={value}
+        onChange={(e) => onChange(fieldKey, e.target.value)}
+        placeholder={isMoney ? '0.00' : 'absent'}
+        className={`text-xs h-9 font-body-sm ${validationError ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+      />
+      {validationError ? (
+        <p className="text-destructive text-[11px] font-label-md mt-1">{validationError}</p>
+      ) : field.gate_error ? (
+        <p className="text-destructive text-[11px] font-label-md mt-1">{field.gate_error}</p>
+      ) : null}
     </div>
   );
 }
@@ -190,14 +244,19 @@ function LineItemsSection({ lineItems }) {
 
 export default function DocumentReview({ documentId, onBack }) {
   const [extraction, setExtraction] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(documentId));
   const [error, setError] = useState(null);
   const [notReady, setNotReady] = useState(false);
 
   const [fileUrl, setFileUrl] = useState(null);
   const [fileType, setFileType] = useState(null);
-  const [fileLoading, setFileLoading] = useState(false);
+  const [fileLoading, setFileLoading] = useState(() => Boolean(documentId));
   const [fileError, setFileError] = useState(null);
+
+  const [editedValues, setEditedValues] = useState({});
+  const [validationErrors, setValidationErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
 
   useEffect(() => {
     if (!documentId) {
@@ -234,6 +293,9 @@ export default function DocumentReview({ documentId, onBack }) {
   }, [documentId]);
 
   useEffect(() => {
+    setEditedValues({});
+    setValidationErrors({});
+    setSaveError(null);
     if (!documentId) {
       setExtraction(null);
       setError(null);
@@ -265,6 +327,72 @@ export default function DocumentReview({ documentId, onBack }) {
     };
   }, [documentId]);
 
+  const handleFieldChange = (key, value) => {
+    setEditedValues((prev) => ({ ...prev, [key]: value }));
+    setValidationErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setSaveError(null);
+  };
+
+  const handleDiscardChanges = () => {
+    setEditedValues({});
+    setValidationErrors({});
+    setSaveError(null);
+  };
+
+  const dirtyKeys = Object.keys(editedValues).filter((key) => {
+    const original = extraction?.fields?.[key]?.value ?? '';
+    return editedValues[key] !== original;
+  });
+
+  const handleSaveCorrections = async () => {
+    const nextErrors = {};
+    const corrections = [];
+    for (const key of dirtyKeys) {
+      const raw = editedValues[key];
+      const value = raw === '' ? null : raw;
+      if (value !== null && MONEY_FIELDS.has(key) && !MONEY_PATTERN.test(value)) {
+        nextErrors[key] = 'Must be a decimal with exactly two places, e.g. 1250.00';
+        continue;
+      }
+      corrections.push({ field: key, value });
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setValidationErrors(nextErrors);
+      return;
+    }
+    if (corrections.length === 0) return;
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const merged = await correctExtraction(documentId, corrections);
+      setExtraction(merged);
+      setEditedValues({});
+      setValidationErrors({});
+    } catch (err) {
+      setSaveError(err instanceof ApiError ? err.message : 'Failed to save corrections.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const previewPhase = !documentId
+    ? 'empty'
+    : fileLoading
+      ? 'loading'
+      : fileError
+        ? 'error'
+        : fileUrl && fileType?.startsWith('image/')
+          ? 'image'
+          : fileUrl
+            ? 'download'
+            : 'empty';
+
   return (
     <div className="flex-1 flex overflow-hidden w-full h-full animate-fadeIn">
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden w-full">
@@ -279,47 +407,62 @@ export default function DocumentReview({ documentId, onBack }) {
             </Button>
           </div>
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20 overflow-hidden">
-            {!documentId && (
-              <p className="text-muted-foreground">Select a document to preview.</p>
-            )}
+            {(() => {
+              switch (previewPhase) {
+                case 'loading':
+                  return (
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      <span>Loading document…</span>
+                    </div>
+                  );
 
-            {documentId && fileLoading && (
-              <div className="flex flex-col items-center gap-2">
-                <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                <span>Loading document…</span>
-              </div>
-            )}
+                case 'error':
+                  return (
+                    <>
+                      <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
+                      <p className="font-medium text-foreground">Could not load document</p>
+                      <p className="text-muted-foreground mt-1 max-w-sm">{fileError}</p>
+                    </>
+                  );
 
-            {documentId && !fileLoading && fileError && (
-              <>
-                <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
-                <p className="font-medium text-foreground">Could not load document</p>
-                <p className="text-muted-foreground mt-1 max-w-sm">{fileError}</p>
-              </>
-            )}
+                case 'image':
+                  return (
+                    <img
+                      src={fileUrl}
+                      alt="Document preview"
+                      className="max-w-full max-h-full object-contain rounded-md shadow-lg"
+                    />
+                  );
 
-            {documentId && !fileLoading && !fileError && fileUrl && fileType?.startsWith('image/') && (
-              <img
-                src={fileUrl}
-                alt="Document preview"
-                className="max-w-full max-h-full object-contain rounded-md shadow-lg"
-              />
-            )}
+                case 'download':
+                  return (
+                    <div className="flex flex-col items-center gap-3">
+                      <FileText className="w-10 h-10 text-muted-foreground/50" />
+                      <p className="font-medium text-foreground">No inline preview for {fileType}</p>
+                      <a
+                        href={fileUrl}
+                        download={`${documentId}${EXTENSION_BY_TYPE[fileType] || ''}`}
+                        className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'gap-1.5')}
+                      >
+                        <Download className="w-4 h-4" />
+                        Download file
+                      </a>
+                    </div>
+                  );
 
-            {documentId && !fileLoading && !fileError && fileUrl && fileType && !fileType.startsWith('image/') && (
-              <div className="flex flex-col items-center gap-3">
-                <FileText className="w-10 h-10 text-muted-foreground/50" />
-                <p className="font-medium text-foreground">No inline preview for {fileType}</p>
-                <a
-                  href={fileUrl}
-                  download={`${documentId}${EXTENSION_BY_TYPE[fileType] || ''}`}
-                  className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'gap-1.5')}
-                >
-                  <Download className="w-4 h-4" />
-                  Download file
-                </a>
-              </div>
-            )}
+                case 'empty':
+                default:
+                  return (
+                    <>
+                      <FileText className="w-10 h-10 mb-3 text-muted-foreground/50" />
+                      <p className="text-muted-foreground">
+                        {documentId ? 'No preview available for this document.' : 'Select a document to preview.'}
+                      </p>
+                    </>
+                  );
+              }
+            })()}
           </div>
         </section>
 
@@ -405,9 +548,40 @@ export default function DocumentReview({ documentId, onBack }) {
 
                 <div className="space-y-3">
                   <h4 className="font-label-md text-xs text-muted-foreground uppercase tracking-wider font-semibold">Extracted Fields</h4>
-                  {FIELD_ORDER.map((key) => (
-                    <FieldRow key={key} label={FIELD_LABELS[key]} field={extraction.fields?.[key]} />
-                  ))}
+                  {FIELD_ORDER.map((key) => {
+                    const field = extraction.fields?.[key] ?? EMPTY_FIELD;
+                    const value = key in editedValues ? editedValues[key] : (field.value ?? '');
+                    return (
+                      <EditableFieldRow
+                        key={key}
+                        fieldKey={key}
+                        label={FIELD_LABELS[key]}
+                        field={field}
+                        value={value}
+                        onChange={handleFieldChange}
+                        validationError={validationErrors[key]}
+                      />
+                    );
+                  })}
+
+                  {saveError && (
+                    <Alert variant="destructive">
+                      <AlertCircle className="w-4 h-4" />
+                      <AlertDescription>{saveError}</AlertDescription>
+                    </Alert>
+                  )}
+
+                  {dirtyKeys.length > 0 && (
+                    <div className="flex gap-2 pt-1">
+                      <Button size="sm" onClick={handleSaveCorrections} disabled={saving} className="gap-1.5 flex-1">
+                        {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Save {dirtyKeys.length} correction{dirtyKeys.length === 1 ? '' : 's'}
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={handleDiscardChanges} disabled={saving}>
+                        Discard
+                      </Button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="h-px w-full bg-border/40"></div>

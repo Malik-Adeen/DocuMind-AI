@@ -6,7 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, CheckCircle2, AlertCircle, Search, Trash2, XCircle, FileText, Image as ImageIcon } from 'lucide-react';
+import { RefreshCw, CheckCircle2, AlertCircle, Eye, Search, Trash2, XCircle, FileText, Image as ImageIcon } from 'lucide-react';
 
 const TERMINAL_STATUSES = ['complete', 'needs_review', 'failed'];
 
@@ -82,7 +82,8 @@ export default function ProcessingQueue({ queueItems, onUpdateItem, onDismissIte
 
   const activeCount = queueItems.filter((item) => !TERMINAL_STATUSES.includes(item.status)).length;
   const completedCount = queueItems.filter((item) => item.status === 'complete').length;
-  const failedCount = queueItems.filter((item) => item.status === 'failed' || item.status === 'needs_review').length;
+  const needsReviewCount = queueItems.filter((item) => item.status === 'needs_review').length;
+  const failedCount = queueItems.filter((item) => item.status === 'failed').length;
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto p-4 md:p-6 lg:p-8 animate-fadeIn">
@@ -104,7 +105,7 @@ export default function ProcessingQueue({ queueItems, onUpdateItem, onDismissIte
       </div>
 
       {/* KPI Overview Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="border-l-4 border-l-primary p-5 flex items-center gap-4">
           <div className="p-3 rounded-full bg-primary/10 text-primary-light border border-primary/20">
             <RefreshCw className="w-5 h-5 animate-spin" />
@@ -125,12 +126,22 @@ export default function ProcessingQueue({ queueItems, onUpdateItem, onDismissIte
           </div>
         </Card>
 
+        <Card className="border-l-4 border-l-amber-500 p-5 flex items-center gap-4">
+          <div className="p-3 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <Eye className="w-5 h-5" />
+          </div>
+          <div>
+            <p className="text-[11px] font-label-md text-muted-foreground uppercase tracking-wider font-semibold">Needs Review</p>
+            <p className="text-2xl font-bold text-foreground font-display-lg mt-0.5">{needsReviewCount}</p>
+          </div>
+        </Card>
+
         <Card className="border-l-4 border-l-destructive p-5 flex items-center gap-4">
           <div className="p-3 rounded-full bg-destructive/10 text-destructive border border-destructive/20">
             <AlertCircle className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[11px] font-label-md text-muted-foreground uppercase tracking-wider font-semibold">Failed / Review</p>
+            <p className="text-[11px] font-label-md text-muted-foreground uppercase tracking-wider font-semibold">Failed</p>
             <p className="text-2xl font-bold text-foreground font-display-lg mt-0.5">{failedCount}</p>
           </div>
         </Card>
