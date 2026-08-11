@@ -283,6 +283,40 @@ def test_needs_review_when_any_present_field_has_no_verifying_gate() -> None:
     assert outcome.status == "needs_review"
 
 
+def test_zero_populated_fields_routes_to_needs_review_not_complete() -> None:
+    llm, _spy = hosted_llm(llm_body({}))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.status == "needs_review"
+    assert outcome.result["review"]["required"] is True
+
+
+def test_all_populated_fields_verified_routes_to_complete() -> None:
+    fields = {"iban": llm_field(IBAN_VALID)}
+    llm, _spy = hosted_llm(llm_body(fields))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.result["fields"]["iban"]["verified"] is True
+    assert outcome.status == "complete"
+    assert outcome.result["review"]["required"] is False
+
+
+def test_some_populated_fields_unverified_routes_to_needs_review() -> None:
+    fields = {
+        "iban": llm_field(IBAN_VALID),
+        "po_number": llm_field("PO-2291"),
+    }
+    llm, _spy = hosted_llm(llm_body(fields))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.result["fields"]["iban"]["verified"] is True
+    assert outcome.result["fields"]["po_number"]["verified"] is False
+    assert outcome.status == "needs_review"
+
+
 def test_null_valued_fields_do_not_block_completion() -> None:
     fields = {
         "iban": llm_field(IBAN_VALID),
