@@ -42,3 +42,4 @@ node_modules/
 !**/evals/golden/*/
 !**/evals/golden/*/labels/
 !**/evals/golden/*/labels/**
+CodeBase/backend/var/
