@@ -29,8 +29,8 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
     setUploads((prev) => [pendingUpload, ...prev]);
 
     try {
-      // Default classification 'restricted' per backend contract (no UI control added per directive)
-      const response = await uploadDocument(file, 'restricted');
+      // Default classification 'synthetic' — prototype profile permits public and synthetic only (ADR-006)
+      const response = await uploadDocument(file, 'synthetic');
       setUploads((prev) =>
         prev.map((item) =>
           item.id === uploadId

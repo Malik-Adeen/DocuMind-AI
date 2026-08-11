@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { getExtraction, ApiError } from '../../api/client';
+import { getExtraction, getDocumentFile, ApiError } from '../../api/client';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
   FileText,
@@ -14,7 +15,15 @@ import {
   AlertCircle,
   Loader2,
   SearchX,
+  Download,
 } from 'lucide-react';
+
+const EXTENSION_BY_TYPE = {
+  'application/pdf': '.pdf',
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/tiff': '.tiff',
+};
 
 const FIELD_ORDER = [
   'po_number', 'invoice_number', 'customer_name', 'vendor_name', 'cnic', 'iban',
@@ -185,6 +194,45 @@ export default function DocumentReview({ documentId, onBack }) {
   const [error, setError] = useState(null);
   const [notReady, setNotReady] = useState(false);
 
+  const [fileUrl, setFileUrl] = useState(null);
+  const [fileType, setFileType] = useState(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState(null);
+
+  useEffect(() => {
+    if (!documentId) {
+      setFileUrl(null);
+      setFileType(null);
+      setFileError(null);
+      return;
+    }
+    let cancelled = false;
+    let objectUrl = null;
+    setFileLoading(true);
+    setFileError(null);
+    setFileUrl(null);
+    setFileType(null);
+    getDocumentFile(documentId)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setFileUrl(objectUrl);
+        setFileType(blob.type);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setFileError(err instanceof ApiError ? err.message : 'Failed to load document file.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setFileLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [documentId]);
+
   useEffect(() => {
     if (!documentId) {
       setExtraction(null);
@@ -230,10 +278,48 @@ export default function DocumentReview({ documentId, onBack }) {
               Exit Workspace
             </Button>
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20">
-            <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
-            <p className="font-medium text-foreground">No preview available</p>
-            <p className="text-muted-foreground mt-1 max-w-sm">The API contract does not expose a binary file-preview endpoint for extracted document surfaces.</p>
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20 overflow-hidden">
+            {!documentId && (
+              <p className="text-muted-foreground">Select a document to preview.</p>
+            )}
+
+            {documentId && fileLoading && (
+              <div className="flex flex-col items-center gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                <span>Loading document…</span>
+              </div>
+            )}
+
+            {documentId && !fileLoading && fileError && (
+              <>
+                <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
+                <p className="font-medium text-foreground">Could not load document</p>
+                <p className="text-muted-foreground mt-1 max-w-sm">{fileError}</p>
+              </>
+            )}
+
+            {documentId && !fileLoading && !fileError && fileUrl && fileType?.startsWith('image/') && (
+              <img
+                src={fileUrl}
+                alt="Document preview"
+                className="max-w-full max-h-full object-contain rounded-md shadow-lg"
+              />
+            )}
+
+            {documentId && !fileLoading && !fileError && fileUrl && fileType && !fileType.startsWith('image/') && (
+              <div className="flex flex-col items-center gap-3">
+                <FileText className="w-10 h-10 text-muted-foreground/50" />
+                <p className="font-medium text-foreground">No inline preview for {fileType}</p>
+                <a
+                  href={fileUrl}
+                  download={`${documentId}${EXTENSION_BY_TYPE[fileType] || ''}`}
+                  className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'gap-1.5')}
+                >
+                  <Download className="w-4 h-4" />
+                  Download file
+                </a>
+              </div>
+            )}
           </div>
         </section>
 

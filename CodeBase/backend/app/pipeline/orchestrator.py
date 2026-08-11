@@ -144,6 +144,8 @@ def _assert_money_fields_gated(fields: Mapping[str, Any]) -> None:
 
 def _needs_review(fields: Mapping[str, Any]) -> bool:
     populated = [entry for entry in fields.values() if entry.get("value") is not None]
+    if not populated:
+        return True
     return not all(entry.get("verified") for entry in populated)
 
 

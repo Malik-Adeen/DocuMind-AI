@@ -117,6 +117,10 @@ export function getExtraction(documentId) {
   return request(`/documents/${documentId}/extraction`);
 }
 
+export function getDocumentFile(documentId) {
+  return request(`/documents/${documentId}/file`);
+}
+
 export function correctExtraction(documentId, corrections) {
   return request(`/documents/${documentId}/extraction`, {
     method: 'PATCH',

@@ -14,6 +14,7 @@ from app.db.fixtures import DOC_LOW_CONF_VERIFIED as DOC_LOW_CONF_VERIFIED
 from app.db.fixtures import DOCUMENTS as FIXTURE_DOCUMENTS
 from app.db.fixtures import EXTRACTIONS as FIXTURE_EXTRACTIONS
 from app.db.fixtures import field
+from app.db.seed import PLACEHOLDER
 
 EXTRACTIONS: dict[str, dict[str, Any]] = {k: dict(v) for k, v in FIXTURE_EXTRACTIONS.items()}
 DOCUMENTS: dict[str, dict[str, Any]] = {k: dict(v) for k, v in FIXTURE_DOCUMENTS.items()}
@@ -140,6 +141,8 @@ async def upload(
         "uploaded_at": uploaded_at,
         "needs_review_count": 0,
         "uploaded_monotonic": time.monotonic(),
+        "content_type": file.content_type,
+        "content": body,
     }
     return JSONResponse(
         status_code=202,
@@ -214,6 +217,35 @@ async def document_status(
             "stage_detail": stage_detail,
             "error": None,
         },
+    )
+
+
+KNOWN_FIXTURE_IDS = {DOC_FAILED_GATE, DOC_FORMAT_ONLY, DOC_LOW_CONF_VERIFIED}
+
+
+@app.get("/api/v1/documents/{document_id}/file")
+async def download_file(
+    document_id: str,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    if role_of(authorization) is None:
+        return error(401, "UNAUTHORIZED", "Missing or invalid bearer token.", False)
+    if document_id not in DOCUMENTS:
+        return error(404, "NOT_FOUND", "No such document.", False)
+
+    record = DOCUMENTS[document_id]
+    content = record.get("content")
+    content_type = record.get("content_type")
+    if content is None:
+        if document_id not in KNOWN_FIXTURE_IDS:
+            return error(404, "NOT_FOUND", "No file stored for this document.", False)
+        content = PLACEHOLDER + document_id.encode()
+        content_type = "application/pdf"
+
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{record["filename"]}"'},
     )
 
 

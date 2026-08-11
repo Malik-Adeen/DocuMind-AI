@@ -171,6 +171,45 @@ def test_extraction_returns_409_before_terminal(
     assert_error_envelope(response.json(), "NOT_READY", True)
 
 
+def test_download_file_returns_the_raw_upload_with_its_content_type(
+    client: TestClient, reviewer: dict[str, str]
+) -> None:
+    document_id = client.post(
+        "/api/v1/documents", files={"file": PDF}, data=CLASSIFIED, headers=reviewer
+    ).json()["document_id"]
+
+    response = client.get(f"/api/v1/documents/{document_id}/file", headers=reviewer)
+    assert response.status_code == 200
+    assert response.content == PDF[1]
+    assert response.headers["content-type"] == "application/pdf"
+
+
+@pytest.mark.parametrize(
+    "document_id",
+    [
+        mock_server.DOC_FAILED_GATE,
+        mock_server.DOC_FORMAT_ONLY,
+        mock_server.DOC_LOW_CONF_VERIFIED,
+    ],
+)
+def test_download_file_for_a_seeded_fixture_returns_bytes(
+    client: TestClient, reviewer: dict[str, str], document_id: str
+) -> None:
+    response = client.get(f"/api/v1/documents/{document_id}/file", headers=reviewer)
+    assert response.status_code == 200
+    assert response.content
+
+
+def test_download_file_for_unknown_document_returns_404(
+    client: TestClient, reviewer: dict[str, str]
+) -> None:
+    response = client.get(
+        "/api/v1/documents/00000000-0000-0000-0000-000000000000/file", headers=reviewer
+    )
+    assert response.status_code == 404
+    assert_error_envelope(response.json(), "NOT_FOUND", False)
+
+
 @pytest.mark.parametrize(
     "document_id",
     [
@@ -290,6 +329,7 @@ def test_every_endpoint_requires_a_bearer_token(client: TestClient) -> None:
         ("get", "/api/v1/documents", {}),
         ("get", f"/api/v1/documents/{mock_server.DOC_FAILED_GATE}/status", {}),
         ("get", f"/api/v1/documents/{mock_server.DOC_FAILED_GATE}/extraction", {}),
+        ("get", f"/api/v1/documents/{mock_server.DOC_FAILED_GATE}/file", {}),
         (
             "patch",
             f"/api/v1/documents/{mock_server.DOC_FAILED_GATE}/extraction",
