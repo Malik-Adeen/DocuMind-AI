@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from app.api.v1 import auth, documents, exports
@@ -19,6 +20,12 @@ def create_app() -> FastAPI:
     logging.basicConfig(level=settings.log_level)
 
     application = FastAPI(title="DocuMind", version="0.3.0")
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     install_error_handlers(application)
 
     @application.middleware("http")

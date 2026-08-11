@@ -1,13 +1,13 @@
 ---
 status: draft
 owner: Adeen & Frontend
-last_reviewed: 2026-08-05
-version: 0.3.0
+last_reviewed: 2026-08-11
+version: 0.3.2
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.0 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.3.2 · **Status:** Draft — freeze before frontend work starts
 **Owners:** backend (Adeen) + frontend (friend). Changes require both.
 
 > ✅ **Implemented.** Every endpoint below is now served by the real application
@@ -97,6 +97,32 @@ work, every time, until the document is real.
 
 **It is immutable once set.** There is no endpoint to change it; see §5. Reclassifying a document
 means uploading it again, which yields a new `document_id`.
+
+### Enforced again at extraction, not just at upload (new in 0.3.2)
+
+Upload-time validation (above) is not the only check. `app/pipeline/llm/client.py`'s
+`assert_releasable` reads `data_classification` off the document record a second time, when
+extraction runs, and raises `HostedEndpointRefusedError` **before any request leaves the machine**
+if the pipeline's LLM endpoint is hosted and the classification is not `public` or `synthetic`. A
+hosted endpoint only ever pairs with the `prototype` profile — `LLMClient` refuses to construct a
+`production` + hosted combination (`ProfileMisconfiguredError`) — so in practice this guard is live
+on `prototype` and a no-op on `production`, where nothing leaves the machine regardless.
+
+**The refusal is not returned as a distinct error.** It propagates out of the extraction task like
+any other unhandled failure: the document's `status` becomes `failed`, the same as an OCR or LLM
+error. **`GET .../status`'s `error` field is always `null` today, regardless of cause** —
+`HostedEndpointRefusedError`'s message reaches only the server log, not the API. Frontend: a
+`restricted` document that reaches `failed` on `prototype` is indistinguishable, via the API alone,
+from any other extraction failure.
+
+### A second, storage-level default (new in 0.3.2)
+
+§2's upload validation is default-deny at the API layer — the field is required, never inferred,
+never defaulted to something permissive. Separately, the `documents.data_classification` column
+itself is `server_default='restricted'` at the database layer. The two are not redundant: the API
+default-denies a *caller* who omits the field on this endpoint; the column default-denies a *row*
+written by anything that bypasses this endpoint entirely (a migration, a direct insert) — it lands
+on the least-permissive value rather than an empty one.
 
 ---
 
@@ -376,3 +402,27 @@ the mock, or use the three seeded fixture documents, until the worker lands.
 The mock lives under `tests/`, **not** under `app/`. It is a test double: shipped code must never
 import it, and it stays outside the mypy-strict scope (`files = ["app"]`). A mock in `app/` is a
 mock that eventually gets deployed.
+
+---
+
+## 10. Raw file (new in 0.3.1)
+
+```
+GET /api/v1/documents/{id}/file
+→ 200  binary stream, Content-Type = the file's original upload content type
+→ 404  { "code": "NOT_FOUND", ... } no such document
+```
+
+Returns the exact bytes the client uploaded — no transformation, no re-encoding. Raw uploads are
+immutable (INV-3); this endpoint only ever reads `storage_path` off the document record, the same
+file `store_upload` wrote as read-only at upload time. Nothing about serving it may write to that
+path.
+
+**Not gated on processing status**, unlike `/extraction`. The file exists from the moment upload
+returns `202`, independent of `queued`/`ocr`/`extracting`/etc. — a frontend preview doesn't have to
+wait for a terminal status to show the document.
+
+`Content-Type` is whatever `content_type` was recorded on upload (§2) — not inferred from the
+file's bytes or extension. **Frontend: don't assume it's an image.** A `.pdf` upload returns
+`application/pdf`; render accordingly, or offer a download rather than trying to draw it as an
+`<img>`.

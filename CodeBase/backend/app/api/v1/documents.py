@@ -4,7 +4,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user, get_db, require_reviewer
@@ -91,6 +91,21 @@ def document_status(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     return JSONResponse(status_code=200, content=status_payload(get_document(db, document_id)))
+
+
+@router.get("/{document_id}/file")
+def download_file(
+    document_id: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    document = get_document(db, document_id)
+    return FileResponse(
+        path=document.storage_path,
+        media_type=document.content_type,
+        filename=document.filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/{document_id}/extraction")
