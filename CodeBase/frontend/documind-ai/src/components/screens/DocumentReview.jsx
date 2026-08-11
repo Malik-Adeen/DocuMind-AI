@@ -1,5 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { getExtraction, ApiError } from '../../api/client';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import {
+  FileText,
+  CheckCircle2,
+  XCircle,
+  HelpCircle,
+  ArrowLeft,
+  ShieldCheck,
+  AlertCircle,
+  Loader2,
+  SearchX,
+} from 'lucide-react';
 
 const FIELD_ORDER = [
   'po_number', 'invoice_number', 'customer_name', 'vendor_name', 'cnic', 'iban',
@@ -27,51 +42,46 @@ const FIELD_LABELS = {
   notes: 'Notes',
 };
 
-function confidenceTone(confidence) {
-  if (confidence >= 0.85) return 'high';
-  if (confidence >= 0.6) return 'medium';
-  return 'low';
+function confidenceBadgeVariant(confidence) {
+  if (confidence >= 0.85) return 'success';
+  if (confidence >= 0.6) return 'warning';
+  return 'destructive';
 }
-
-const CONFIDENCE_STYLES = {
-  high: 'bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20',
-  medium: 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20',
-  low: 'bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20',
-};
 
 function FieldRow({ label, field }) {
   if (!field) return null;
-  const tone = confidenceTone(field.confidence);
+  const confVariant = confidenceBadgeVariant(field.confidence);
   return (
-    <div className="group">
-      <div className="flex flex-wrap justify-between items-center mb-1 gap-x-2 gap-y-1">
-        <label className="font-body-sm text-[12px] text-on-surface-variant">{label}</label>
+    <div className="group space-y-1.5 p-3 rounded-lg bg-muted/20 border border-border/30 hover:border-border/60 transition-colors">
+      <div className="flex flex-wrap justify-between items-center gap-2">
+        <label className="font-body-sm text-xs font-medium text-muted-foreground">{label}</label>
+        {/* INVARIANT 2: Confidence and Verification are separate signals with separate visual badges */}
         <div className="flex items-center gap-1.5">
-          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-label-md border ${CONFIDENCE_STYLES[tone]}`}>
-            {Math.round(field.confidence * 100)}%
-          </span>
+          <Badge variant={confVariant} className="text-[10px] py-0 px-1.5 font-label-md">
+            Score: {Math.round(field.confidence * 100)}%
+          </Badge>
           {field.verified ? (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-label-md bg-primary/10 text-primary border border-primary/30"
-              title="Confirmed by a deterministic gate or a human correction"
-            >
-              <span className="material-symbols-outlined text-xs">verified</span> Verified
-            </span>
+            <Badge variant="success" className="text-[10px] py-0 px-1.5 font-label-md" title="Confirmed by a deterministic gate or a human correction">
+              <ShieldCheck className="w-3 h-3 text-emerald-400" />
+              Verified
+            </Badge>
           ) : (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-label-md bg-white/5 text-on-surface-variant border border-outline-variant"
-              title="Not confirmed by a deterministic gate"
-            >
-              <span className="material-symbols-outlined text-xs">help</span> Unverified
-            </span>
+            <Badge variant="unconfirmed" className="text-[10px] py-0 px-1.5 font-label-md" title="Not confirmed by a deterministic gate">
+              <HelpCircle className="w-3 h-3 text-slate-400" />
+              Unverified
+            </Badge>
           )}
         </div>
       </div>
-      <div className="w-full bg-surface-variant border border-outline-variant rounded-md py-2 px-3 text-on-surface font-body-sm min-h-[38px] flex items-center">
-        {field.value !== null && field.value !== '' ? field.value : <span className="text-on-surface-variant italic">absent</span>}
+      <div className="w-full bg-background/80 border border-input rounded-md py-2 px-3 text-xs text-foreground font-body-sm min-h-[36px] flex items-center">
+        {field.value !== null && field.value !== '' ? (
+          <span className="font-medium text-foreground">{field.value}</span>
+        ) : (
+          <span className="text-muted-foreground italic text-[11px]">absent</span>
+        )}
       </div>
       {field.gate_error && (
-        <p className="text-error text-[11px] mt-1">{field.gate_error}</p>
+        <p className="text-destructive text-[11px] font-label-md mt-1">{field.gate_error}</p>
       )}
     </div>
   );
@@ -79,48 +89,64 @@ function FieldRow({ label, field }) {
 
 function GatesSection({ gates }) {
   if (!gates || gates.length === 0) return null;
+
+  // INVARIANT 1: gates[].result is passed/failed/format_only.
+  // format_only renders grouped with failed under "Unconfirmed" — never green, never a checkmark, never adjacent to passed gates.
   const passed = gates.filter(g => g.result === 'passed');
   const unconfirmed = gates.filter(g => g.result === 'failed' || g.result === 'format_only');
 
   return (
-    <div className="flex flex-col gap-3">
-      <h3 className="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold">Validation Gates</h3>
+    <div className="space-y-3 pt-2">
+      <h4 className="font-label-md text-xs text-muted-foreground uppercase tracking-wider font-semibold">Validation Gates</h4>
+      
       {passed.length > 0 && (
-        <div className="flex flex-col gap-2">
+        <div className="space-y-2">
           {passed.map((g, i) => (
-            <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20">
-              <span className="material-symbols-outlined text-primary text-base">check_circle</span>
+            <div key={i} className="flex items-start gap-2.5 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-label-md text-xs text-on-surface">{g.name}</span>
-                  <span className="text-[10px] text-primary font-semibold uppercase shrink-0">Passed</span>
+                  <span className="font-label-md font-semibold text-foreground">{g.name}</span>
+                  <Badge variant="success" className="text-[9px] py-0 px-1 uppercase tracking-wider">Passed</Badge>
                 </div>
-                {g.detail && <p className="text-[11px] text-on-surface-variant mt-0.5">{g.detail}</p>}
+                {g.detail && <p className="text-[11px] text-muted-foreground mt-1">{g.detail}</p>}
               </div>
             </div>
           ))}
         </div>
       )}
+
       {unconfirmed.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <p className="text-[10px] text-on-surface-variant uppercase tracking-wider">Unconfirmed</p>
+        <div className="space-y-2 pt-1">
+          <p className="text-[10px] text-muted-foreground uppercase tracking-wider font-semibold">Unconfirmed Gates</p>
           {unconfirmed.map((g, i) => {
             const isFailed = g.result === 'failed';
             return (
-              <div key={i} className={`flex items-start gap-2 px-3 py-2 rounded-md border ${isFailed ? 'bg-error/5 border-error/30' : 'bg-white/5 border-outline-variant'}`}>
-                <span className={`material-symbols-outlined text-base ${isFailed ? 'text-error' : 'text-on-surface-variant'}`}>
-                  {isFailed ? 'cancel' : 'help'}
-                </span>
+              <div
+                key={i}
+                className={`flex items-start gap-2.5 p-3 rounded-lg border text-xs ${
+                  isFailed
+                    ? 'bg-destructive/10 border-destructive/30'
+                    : 'bg-muted/40 border-border/40'
+                }`}
+              >
+                {isFailed ? (
+                  <XCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                ) : (
+                  <HelpCircle className="w-4 h-4 text-muted-foreground shrink-0 mt-0.5" />
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-label-md text-xs text-on-surface">{g.name}</span>
-                    <span className={`text-[10px] font-semibold uppercase shrink-0 ${isFailed ? 'text-error' : 'text-on-surface-variant'}`}>
-                      {isFailed ? 'Failed' : 'Format only'}
-                    </span>
+                    <span className="font-label-md font-semibold text-foreground">{g.name}</span>
+                    {isFailed ? (
+                      <Badge variant="destructive" className="text-[9px] py-0 px-1 uppercase tracking-wider">Failed</Badge>
+                    ) : (
+                      <Badge variant="unconfirmed" className="text-[9px] py-0 px-1 uppercase tracking-wider">Format only</Badge>
+                    )}
                   </div>
-                  {g.detail && <p className="text-[11px] text-on-surface-variant mt-0.5">{g.detail}</p>}
+                  {g.detail && <p className="text-[11px] text-muted-foreground mt-1">{g.detail}</p>}
                   {g.affected_fields && g.affected_fields.length > 0 && (
-                    <p className="text-[11px] text-on-surface-variant mt-0.5">Fields: {g.affected_fields.join(', ')}</p>
+                    <p className="text-[11px] text-muted-foreground/80 mt-1 font-label-md">Fields: {g.affected_fields.join(', ')}</p>
                   )}
                 </div>
               </div>
@@ -135,13 +161,13 @@ function GatesSection({ gates }) {
 function LineItemsSection({ lineItems }) {
   if (!lineItems || lineItems.length === 0) return null;
   return (
-    <div className="flex flex-col gap-4">
-      <h3 className="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold">Line Items</h3>
-      <div className="flex flex-col gap-4">
+    <div className="space-y-3 pt-2">
+      <h4 className="font-label-md text-xs text-muted-foreground uppercase tracking-wider font-semibold">Line Items</h4>
+      <div className="space-y-3">
         {lineItems.map((item, i) => (
-          <div key={i} className="flex flex-col gap-3 p-3 rounded-md border border-outline-variant/50 bg-surface-container-low/30">
+          <div key={i} className="p-3 rounded-lg border border-border/40 bg-muted/20 space-y-3">
             <FieldRow label="Description" field={item.description} />
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
               <FieldRow label="Qty" field={item.quantity} />
               <FieldRow label="Unit Price" field={item.unit_price} />
               <FieldRow label="Line Total" field={item.line_total} />
@@ -195,101 +221,114 @@ export default function DocumentReview({ documentId, onBack }) {
     <div className="flex-1 flex overflow-hidden w-full h-full animate-fadeIn">
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden w-full">
 
-        {/* Left Panel: no file-preview endpoint exists in the API */}
-        <section className="flex-1 flex flex-col border-r border-outline-variant/30 bg-surface-container-lowest relative overflow-hidden h-[50vh] md:h-full">
-          <div className="h-12 border-b border-outline-variant/30 bg-surface-container/80 backdrop-blur-md flex items-center justify-between px-4 shrink-0 z-10">
-            <span className="font-label-md text-xs text-on-surface-variant">Document Preview</span>
-            <button
-              onClick={onBack}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-white/5 border border-white/10 text-on-surface hover:bg-white/10 transition-colors font-label-md text-xs cursor-pointer"
-            >
-              <span className="material-symbols-outlined text-base">arrow_back</span>
+        {/* Left Panel: No preview endpoint in API contract */}
+        <section className="flex-1 flex flex-col border-r border-border/40 bg-background relative overflow-hidden h-[40vh] md:h-full">
+          <div className="h-14 border-b border-border/40 bg-card/60 backdrop-blur-md flex items-center justify-between px-5 shrink-0 z-10">
+            <span className="font-label-md text-xs text-muted-foreground font-semibold uppercase tracking-wider">Document Preview</span>
+            <Button variant="glass" size="sm" onClick={onBack} className="gap-1.5 text-xs">
+              <ArrowLeft className="w-4 h-4" />
               Exit Workspace
-            </button>
+            </Button>
           </div>
-          <div className="flex-1 flex items-center justify-center bg-[#010811] text-on-surface-variant text-sm text-center p-8">
-            No preview available — the API has no file-preview endpoint.
+          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20">
+            <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
+            <p className="font-medium text-foreground">No preview available</p>
+            <p className="text-muted-foreground mt-1 max-w-sm">The API contract does not expose a binary file-preview endpoint for extracted document surfaces.</p>
           </div>
         </section>
 
-        {/* Right Panel: Real Extraction Data */}
-        <section className="w-full md:w-[450px] flex flex-col bg-surface flex-shrink-0 border-l border-white/5 relative z-10 shadow-[-4px_0_24px_rgba(0,0,0,0.4)] h-[50vh] md:h-full">
-          <div className="h-16 border-b border-outline-variant/30 flex items-center justify-between px-6 shrink-0 bg-surface-container/50 backdrop-blur-md">
-            <h2 className="font-headline-md text-base font-semibold text-on-surface flex items-center gap-2">
-              <span className="material-symbols-outlined text-primary text-xl">document_scanner</span>
-              Extracted Data
-            </h2>
-            {extraction && (
-              <span className="font-label-md text-xs text-on-surface-variant">
-                {extraction.pipeline_version?.profile}
-              </span>
+        {/* Right Panel: Extraction Results */}
+        <section className="w-full md:w-[460px] flex flex-col bg-card flex-shrink-0 border-l border-border/40 relative z-10 shadow-2xl h-[60vh] md:h-full">
+          <div className="h-14 border-b border-border/40 flex items-center justify-between px-6 shrink-0 bg-muted/20 backdrop-blur-md">
+            <h3 className="font-headline-md text-sm font-bold text-foreground flex items-center gap-2">
+              <FileText className="w-4 h-4 text-primary" />
+              Extracted Workspace Data
+            </h3>
+            {extraction?.pipeline_version?.profile && (
+              <Badge variant="outline" className="font-label-md text-[10px]">
+                {extraction.pipeline_version.profile}
+              </Badge>
             )}
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-5">
+          <div className="flex-1 overflow-y-auto p-6 space-y-5">
             {!documentId && (
-              <p className="text-on-surface-variant text-sm text-center mt-10">Select a document to review.</p>
+              <div className="text-center text-muted-foreground text-xs py-12">
+                Select a document from document history to review extracted fields.
+              </div>
             )}
 
             {documentId && loading && (
-              <div className="flex items-center justify-center mt-10">
-                <div className="w-6 h-6 rounded-full border-2 border-primary/30 border-t-primary animate-spin"></div>
+              <div className="flex flex-col items-center justify-center py-12 text-xs text-muted-foreground gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                <span>Loading extraction data…</span>
               </div>
             )}
 
             {documentId && !loading && notReady && (
-              <div className="px-3 py-2.5 rounded-lg bg-white/5 border border-outline-variant text-on-surface-variant text-xs font-label-md mt-4">
-                Not ready — this document is still processing. Extraction is only available once it reaches a terminal status.
-              </div>
+              <Alert variant="warning">
+                <AlertCircle className="w-4 h-4" />
+                <AlertDescription>
+                  Not ready — this document is still processing. Extraction is available once it reaches terminal status.
+                </AlertDescription>
+              </Alert>
             )}
 
             {documentId && !loading && error && (
-              <div className="px-3 py-2.5 rounded-lg bg-error/10 border border-error/25 text-error text-xs font-label-md mt-4">
-                {error}
-              </div>
+              <Alert variant="destructive">
+                <AlertCircle className="w-4 h-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
             )}
 
             {extraction && !loading && (
               <>
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-label-md text-xs text-on-surface-variant uppercase tracking-wider">Status</span>
-                    <span className="font-label-md text-xs text-on-surface">{extraction.status}</span>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-label-md text-muted-foreground uppercase tracking-wider">Status</span>
+                    <Badge variant={extraction.status === 'complete' ? 'success' : 'secondary'}>
+                      {extraction.status}
+                    </Badge>
                   </div>
+
                   {extraction.document_type && (
-                    <div className="group">
-                      <div className="flex justify-between items-center mb-1 gap-2">
-                        <label className="font-body-sm text-[12px] text-on-surface-variant">Document Type</label>
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-label-md border ${CONFIDENCE_STYLES[confidenceTone(extraction.document_type.confidence)]}`}>
+                    <div className="p-3 rounded-lg bg-muted/20 border border-border/30 space-y-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <label className="font-body-sm text-muted-foreground">Document Type</label>
+                        <Badge variant={confidenceBadgeVariant(extraction.document_type.confidence)}>
                           {Math.round(extraction.document_type.confidence * 100)}%
-                        </span>
+                        </Badge>
                       </div>
-                      <div className="w-full bg-surface-variant border border-outline-variant rounded-md py-2 px-3 text-on-surface font-body-sm">
+                      <div className="font-medium text-foreground text-xs">
                         {extraction.document_type.value}
                       </div>
                     </div>
                   )}
+
                   {extraction.review?.required && (
-                    <div className="px-3 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-label-md">
-                      Review required{extraction.review.reason ? `: ${extraction.review.reason}` : ''}
-                    </div>
+                    <Alert variant="warning">
+                      <AlertCircle className="w-4 h-4" />
+                      <AlertDescription>
+                        Review required{extraction.review.reason ? `: ${extraction.review.reason}` : ''}
+                      </AlertDescription>
+                    </Alert>
                   )}
                 </div>
 
-                <div className="h-px w-full bg-outline-variant/30 my-1"></div>
+                <div className="h-px w-full bg-border/40"></div>
 
-                <div className="flex flex-col gap-4">
-                  <h3 className="font-label-md text-xs text-on-surface-variant uppercase tracking-wider font-semibold">Fields</h3>
+                <div className="space-y-3">
+                  <h4 className="font-label-md text-xs text-muted-foreground uppercase tracking-wider font-semibold">Extracted Fields</h4>
                   {FIELD_ORDER.map((key) => (
                     <FieldRow key={key} label={FIELD_LABELS[key]} field={extraction.fields?.[key]} />
                   ))}
                 </div>
 
-                <div className="h-px w-full bg-outline-variant/30 my-1"></div>
+                <div className="h-px w-full bg-border/40"></div>
 
                 <LineItemsSection lineItems={extraction.line_items} />
 
-                <div className="h-px w-full bg-outline-variant/30 my-1"></div>
+                <div className="h-px w-full bg-border/40"></div>
 
                 <GatesSection gates={extraction.gates} />
               </>

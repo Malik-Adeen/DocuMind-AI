@@ -1,33 +1,50 @@
 import React from 'react';
+import {
+  LayoutDashboard,
+  UploadCloud,
+  Cpu,
+  FileText,
+  BarChart3,
+  Share2,
+  Users,
+  Settings,
+  Rocket,
+  HelpCircle,
+  LogOut,
+  FileSearch,
+} from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 export default function Sidebar({ activeTab, onSelectTab, onLogout, pendingCount }) {
   const mainNavItems = [
-    { id: 'Dashboard', icon: 'dashboard', label: 'Dashboard' },
-    { id: 'Upload', icon: 'cloud_upload', label: 'Upload' },
-    { id: 'Processing', icon: 'settings_suggest', label: 'Processing', badge: pendingCount > 0 ? pendingCount : null },
-    { id: 'Documents', icon: 'description', label: 'Documents' },
-    { id: 'Analytics', icon: 'analytics', label: 'Analytics' },
-    { id: 'Exports', icon: 'ios_share', label: 'Exports' },
-    { id: 'Users', icon: 'group', label: 'Users' },
-    { id: 'Settings', icon: 'settings', label: 'Settings' },
+    { id: 'Dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+    { id: 'Upload', icon: UploadCloud, label: 'Upload' },
+    { id: 'Processing', icon: Cpu, label: 'Processing', badge: pendingCount > 0 ? pendingCount : null },
+    { id: 'Documents', icon: FileText, label: 'Documents' },
+    { id: 'Analytics', icon: BarChart3, label: 'Analytics' },
+    { id: 'Exports', icon: Share2, label: 'Exports' },
+    { id: 'Users', icon: Users, label: 'Users' },
+    { id: 'Settings', icon: Settings, label: 'Settings' },
   ];
 
   return (
-    <nav className="hidden md:flex flex-col bg-surface-container border-r border-white/10 w-64 h-screen fixed left-0 top-0 py-6 px-4 z-50">
+    <nav className="hidden md:flex flex-col bg-card border-r border-border/40 w-64 h-screen fixed left-0 top-0 py-6 px-4 z-50">
       {/* Brand Header */}
       <div className="flex items-center gap-3 mb-8 px-2">
-        <div className="w-10 h-10 rounded-lg bg-primary-container flex items-center justify-center text-white">
-          <span className="material-symbols-outlined font-semibold text-2xl">document_scanner</span>
+        <div className="p-2.5 rounded-lg bg-primary text-white shadow-lg shadow-primary/20">
+          <FileSearch className="w-5 h-5" />
         </div>
         <div>
-          <h1 className="font-headline-md text-headline-md text-primary leading-tight font-bold">DocuMind AI</h1>
-          <p className="font-label-md text-[10px] text-on-surface-variant font-semibold tracking-wider uppercase">Enterprise Intelligence</p>
+          <h1 className="font-bold text-sm text-foreground tracking-tight leading-tight">DocuMind AI</h1>
+          <p className="font-label-md text-[10px] text-muted-foreground font-semibold tracking-wider uppercase">Enterprise Intelligence</p>
         </div>
       </div>
 
-      {/* Main Navigation links */}
+      {/* Main Navigation */}
       <div className="flex-1 overflow-y-auto pr-1 space-y-1">
         {mainNavItems.map((item) => {
+          const IconComponent = item.icon;
           const isActive = activeTab === item.id || (item.id === 'Documents' && activeTab === 'Review');
           return (
             <button
@@ -35,50 +52,50 @@ export default function Sidebar({ activeTab, onSelectTab, onLogout, pendingCount
               onClick={() => onSelectTab(item.id)}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg font-label-md text-xs cursor-pointer transition-all duration-200 ${
                 isActive
-                  ? 'bg-primary-dark text-white font-bold shadow-sm'
-                  : 'text-on-surface-variant hover:text-on-surface hover:bg-white/5'
+                  ? 'bg-primary text-white font-bold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
               }`}
             >
-              <span className={`material-symbols-outlined text-lg ${isActive ? 'text-secondary' : ''}`}>{item.icon}</span>
+              <IconComponent className={`w-4 h-4 ${isActive ? 'text-white' : 'text-muted-foreground'}`} />
               <span className="flex-1 text-left">{item.label}</span>
               {item.badge && (
-                <span className="px-1.5 py-0.5 rounded-full bg-primary text-white font-bold text-[9px]">
+                <Badge variant="default" className="px-1.5 py-0 text-[9px] h-4 leading-none">
                   {item.badge}
-                </span>
+                </Badge>
               )}
             </button>
           );
         })}
       </div>
 
-      {/* Footer CTA & Secondary links */}
-      <div className="mt-auto pt-6 border-t border-white/10 flex flex-col gap-4">
-        <button 
-          onClick={() => alert('Pricing tiers modal opened...')}
-          className="w-full py-2.5 px-4 rounded-lg bg-gradient-to-r from-primary-container to-secondary-container text-white font-label-md text-xs font-bold hover:shadow-[0_0_15px_rgba(79,70,229,0.5)] transition-all flex items-center justify-center gap-2 cursor-pointer"
+      {/* Footer CTA & Actions */}
+      <div className="mt-auto pt-6 border-t border-border/40 space-y-3">
+        <Button
+          onClick={() => alert('Upgrade tier options initialized.')}
+          className="w-full text-xs font-bold gap-2 bg-gradient-to-r from-primary to-accent hover:opacity-95"
         >
-          <span className="material-symbols-outlined text-base">rocket_launch</span>
+          <Rocket className="w-4 h-4" />
           Upgrade Plan
-        </button>
+        </Button>
 
         <div className="space-y-1">
           <button
             onClick={() => onSelectTab('Help')}
             className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg font-label-md text-xs cursor-pointer transition-all duration-200 ${
               activeTab === 'Help'
-                ? 'bg-primary-dark text-white font-bold'
-                : 'text-on-surface-variant hover:text-on-surface hover:bg-white/5'
+                ? 'bg-primary text-white font-bold'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
             }`}
           >
-            <span className={`material-symbols-outlined text-lg ${activeTab === 'Help' ? 'text-secondary' : ''}`}>help</span>
+            <HelpCircle className="w-4 h-4" />
             <span className="text-left">Help</span>
           </button>
-          
+
           <button
             onClick={onLogout}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg font-label-md text-xs text-on-surface-variant hover:text-error hover:bg-error/10 cursor-pointer transition-all duration-200"
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-lg font-label-md text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 cursor-pointer transition-all duration-200"
           >
-            <span className="material-symbols-outlined text-lg">logout</span>
+            <LogOut className="w-4 h-4" />
             <span className="text-left">Logout</span>
           </button>
         </div>

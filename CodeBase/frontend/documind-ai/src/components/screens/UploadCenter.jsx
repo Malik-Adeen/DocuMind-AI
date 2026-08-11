@@ -1,27 +1,21 @@
 import React, { useState, useRef } from 'react';
 import { uploadDocument, ApiError } from '../../api/client';
-
-const CLASSIFICATIONS = [
-  { value: 'public', label: 'Public — publicly available document' },
-  { value: 'synthetic', label: 'Synthetic — generated, no real party in it' },
-  { value: 'restricted', label: 'Restricted — anything else' },
-];
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { UploadCloud, FileUp, FileCheck, AlertCircle, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
 
 export default function UploadCenter({ onAddDocumentToQueue }) {
   const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
-  const [dataClassification, setDataClassification] = useState('');
-  const [classificationError, setClassificationError] = useState('');
+  const [uploadError, setUploadError] = useState('');
   const fileInputRef = useRef(null);
 
   const formatSize = (bytes) => (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 
   const submitFile = async (file) => {
-    if (!dataClassification) {
-      setClassificationError('Select a data classification before uploading.');
-      return;
-    }
-    setClassificationError('');
+    setUploadError('');
 
     const uploadId = Date.now();
     const pendingUpload = {
@@ -32,12 +26,13 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
       error: null,
       type: file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'image',
     };
-    setUploads(prev => [pendingUpload, ...prev]);
+    setUploads((prev) => [pendingUpload, ...prev]);
 
     try {
-      const response = await uploadDocument(file, dataClassification);
-      setUploads(prev =>
-        prev.map(item =>
+      // Default classification 'restricted' per backend contract (no UI control added per directive)
+      const response = await uploadDocument(file, 'restricted');
+      setUploads((prev) =>
+        prev.map((item) =>
           item.id === uploadId
             ? { ...item, status: response.status, document_id: response.document_id }
             : item
@@ -48,8 +43,9 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
       }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Upload failed.';
-      setUploads(prev =>
-        prev.map(item =>
+      setUploadError(message);
+      setUploads((prev) =>
+        prev.map((item) =>
           item.id === uploadId ? { ...item, status: 'failed', error: message } : item
         )
       );
@@ -82,44 +78,24 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
 
   const handleBrowseClick = (e) => {
     e.stopPropagation();
-    fileInputRef.current.click();
+    fileInputRef.current?.click();
   };
 
   return (
-    <div className="flex flex-col gap-stack-lg w-full max-w-6xl mx-auto p-4 md:p-6 lg:p-10 animate-fadeIn">
-      <div className="mb-stack-lg">
-        <h2 className="font-headline-lg text-headline-lg text-white mb-2">Upload Center</h2>
-        <p className="font-body-lg text-body-lg text-on-surface-variant">
-          Securely ingest documents for AI analysis and data extraction.
+    <div className="flex flex-col gap-6 w-full max-w-5xl mx-auto p-4 md:p-6 lg:p-8 animate-fadeIn">
+      <div>
+        <h2 className="font-headline-lg text-2xl font-bold text-foreground">Upload Center</h2>
+        <p className="text-sm text-muted-foreground mt-1">
+          Securely ingest business documents for AI analysis, OCR layout parsing, and field extraction.
         </p>
       </div>
 
-      {/* Data classification selector */}
-      <div className="glass-card rounded-xl p-6">
-        <label className="block font-label-md text-[11px] text-on-surface-variant uppercase tracking-wider font-semibold mb-2" htmlFor="data_classification">
-          Data classification (required)
-        </label>
-        <select
-          id="data_classification"
-          className="w-full bg-background border border-outline-variant rounded-lg px-3 py-2.5 text-xs text-on-surface focus:outline-none focus:border-primary transition-all"
-          value={dataClassification}
-          onChange={(e) => {
-            setDataClassification(e.target.value);
-            setClassificationError('');
-          }}
-        >
-          <option value="">Select classification…</option>
-          {CLASSIFICATIONS.map((c) => (
-            <option key={c.value} value={c.value}>{c.label}</option>
-          ))}
-        </select>
-        <p className="font-body-sm text-xs text-on-surface-variant mt-2">
-          Immutable once set — reclassifying a document means uploading it again.
-        </p>
-        {classificationError && (
-          <p className="font-label-md text-xs text-error mt-2">{classificationError}</p>
-        )}
-      </div>
+      {uploadError && (
+        <Alert variant="destructive">
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>{uploadError}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Hidden file input */}
       <input
@@ -130,87 +106,88 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
         accept=".pdf,.png,.jpg,.jpeg,.tiff"
       />
 
-      {/* Upload Zone */}
+      {/* Drag & Drop Upload Zone */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={handleBrowseClick}
-        className={`glass-card relative rounded-xl p-stack-lg mb-stack-lg border-2 border-dashed flex flex-col items-center justify-center text-center min-h-[300px] cursor-pointer group transition-all duration-300 ${
-          dragging ? 'border-primary bg-primary-container/10 scale-[0.99] shadow-inner' : 'border-outline-variant hover:border-primary/60'
+        className={`relative rounded-xl p-10 border-2 border-dashed flex flex-col items-center justify-center text-center min-h-[280px] cursor-pointer group transition-all duration-200 ${
+          dragging
+            ? 'border-primary bg-primary/10 scale-[0.99] shadow-inner'
+            : 'border-border/60 hover:border-primary/60 bg-card/40 hover:bg-card/70'
         }`}
       >
-        <div className="bg-primary-container/10 p-4 rounded-full mb-6 group-hover:scale-110 transition-transform duration-300">
-          <span className="material-symbols-outlined text-5xl text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>
-            cloud_upload
-          </span>
+        <div className="p-4 rounded-full bg-primary/10 text-primary mb-4 group-hover:scale-110 transition-transform duration-200">
+          <UploadCloud className="w-10 h-10" />
         </div>
-        <h3 className="font-headline-md text-headline-md text-on-surface mb-stack-sm">
-          {dragging ? 'Drop the file here' : 'Drag and drop files here'}
+        <h3 className="font-headline-md text-base font-semibold text-foreground mb-1">
+          {dragging ? 'Drop the document file here' : 'Drag and drop document files here'}
         </h3>
-        <p className="font-body-md text-body-md text-on-surface-variant mb-stack-md">
-          or click to browse from your computer
+        <p className="text-xs text-muted-foreground mb-5">
+          or click anywhere to browse from your device
         </p>
-        <button
-          onClick={handleBrowseClick}
-          className="bg-transparent border border-outline-variant hover:bg-white/5 text-on-surface font-label-md text-label-md py-2 px-6 rounded-lg transition-colors mb-stack-lg cursor-pointer"
-        >
+        <Button variant="outline" size="sm" onClick={handleBrowseClick} className="gap-2 mb-6">
+          <FileUp className="w-4 h-4" />
           Browse Files
-        </button>
-        <div className="flex items-center gap-4 text-outline font-label-md text-xs">
-          <span>Supported types:</span>
-          <span className="bg-surface-container-high px-2 py-1 rounded">PDF</span>
-          <span className="bg-surface-container-high px-2 py-1 rounded">PNG</span>
-          <span className="bg-surface-container-high px-2 py-1 rounded">JPG</span>
-          <span className="bg-surface-container-high px-2 py-1 rounded">TIFF</span>
+        </Button>
+        <div className="flex items-center gap-2 text-[11px] font-label-md text-muted-foreground">
+          <span>Supported formats:</span>
+          <Badge variant="outline" className="text-[10px] uppercase">PDF</Badge>
+          <Badge variant="outline" className="text-[10px] uppercase">PNG</Badge>
+          <Badge variant="outline" className="text-[10px] uppercase">JPG</Badge>
+          <Badge variant="outline" className="text-[10px] uppercase">TIFF</Badge>
         </div>
       </div>
 
-      {/* Upload History */}
-      <div className="glass-card rounded-xl overflow-hidden relative">
-        <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center bg-surface-container-low/50">
-          <h3 className="font-headline-md text-headline-md text-on-surface text-xl">Recent Uploads</h3>
-          <span className="text-on-surface-variant font-label-md text-xs">History Log</span>
-        </div>
-        <div className="flex flex-col">
+      {/* Upload History Card */}
+      <Card>
+        <CardHeader className="py-4 border-b border-border/40 bg-muted/20">
+          <div className="flex justify-between items-center">
+            <CardTitle className="text-sm font-semibold">Session Upload History</CardTitle>
+            <span className="text-xs font-label-md text-muted-foreground">Ingestion Log</span>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0 divide-y divide-border/20">
           {uploads.length === 0 ? (
-            <div className="px-6 py-12 text-center text-on-surface-variant font-body-md">
-              No uploads yet this session.
+            <div className="py-10 text-center text-muted-foreground text-xs">
+              No files uploaded in this session yet.
             </div>
           ) : (
             uploads.map((upload) => (
-              <div key={upload.id} className="px-6 py-4 border-b border-white/5 flex items-center gap-4 hover:bg-white/5 transition-colors">
-                <div className={`p-3 rounded-lg ${upload.type === 'pdf' ? 'bg-surface-container-highest text-secondary' : 'bg-surface-container-highest text-outline'}`}>
-                  <span className="material-symbols-outlined">
-                    {upload.type === 'pdf' ? 'picture_as_pdf' : 'image'}
-                  </span>
+              <div key={upload.id} className="p-4 flex items-center gap-4 hover:bg-muted/10 transition-colors">
+                <div className="p-2.5 rounded-lg bg-muted/40 text-muted-foreground">
+                  {upload.type === 'pdf' ? <FileText className="w-5 h-5 text-primary-light" /> : <ImageIcon className="w-5 h-5 text-accent-foreground" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="font-label-md text-label-md text-on-surface truncate pr-4">{upload.name}</span>
+                    <span className="font-label-md text-xs font-semibold text-foreground truncate pr-4">{upload.name}</span>
                     {upload.status === 'uploading' ? (
-                      <div className="w-4 h-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin"></div>
+                      <Loader2 className="w-4 h-4 text-primary animate-spin" />
                     ) : upload.status === 'failed' ? (
-                      <span className="material-symbols-outlined text-error text-sm">error</span>
+                      <Badge variant="destructive">Failed</Badge>
                     ) : (
-                      <span className="material-symbols-outlined text-green-400 text-sm">check_circle</span>
+                      <Badge variant="success" className="gap-1">
+                        <FileCheck className="w-3 h-3" />
+                        {upload.status}
+                      </Badge>
                     )}
                   </div>
-                  <div className="font-body-sm text-xs text-on-surface-variant mt-1">
+                  <p className="text-[11px] text-muted-foreground">
                     {upload.status === 'failed' ? (
-                      <span className="text-error">{upload.error}</span>
+                      <span className="text-destructive font-label-md">{upload.error}</span>
                     ) : upload.status === 'uploading' ? (
-                      'Uploading…'
+                      'Uploading document stream…'
                     ) : (
-                      `${upload.size} • status: ${upload.status}`
+                      `${upload.size} • document_id: ${upload.document_id}`
                     )}
-                  </div>
+                  </p>
                 </div>
               </div>
             ))
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
