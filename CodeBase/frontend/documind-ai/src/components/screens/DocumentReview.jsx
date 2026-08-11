@@ -265,6 +265,18 @@ export default function DocumentReview({ documentId, onBack }) {
     };
   }, [documentId]);
 
+  const previewPhase = !documentId
+    ? 'empty'
+    : fileLoading
+      ? 'loading'
+      : fileError
+        ? 'error'
+        : fileUrl && fileType?.startsWith('image/')
+          ? 'image'
+          : fileUrl
+            ? 'download'
+            : 'empty';
+
   return (
     <div className="flex-1 flex overflow-hidden w-full h-full animate-fadeIn">
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden w-full">
@@ -279,47 +291,62 @@ export default function DocumentReview({ documentId, onBack }) {
             </Button>
           </div>
           <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20 overflow-hidden">
-            {!documentId && (
-              <p className="text-muted-foreground">Select a document to preview.</p>
-            )}
+            {(() => {
+              switch (previewPhase) {
+                case 'loading':
+                  return (
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                      <span>Loading document…</span>
+                    </div>
+                  );
 
-            {documentId && fileLoading && (
-              <div className="flex flex-col items-center gap-2">
-                <Loader2 className="w-6 h-6 animate-spin text-primary" />
-                <span>Loading document…</span>
-              </div>
-            )}
+                case 'error':
+                  return (
+                    <>
+                      <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
+                      <p className="font-medium text-foreground">Could not load document</p>
+                      <p className="text-muted-foreground mt-1 max-w-sm">{fileError}</p>
+                    </>
+                  );
 
-            {documentId && !fileLoading && fileError && (
-              <>
-                <SearchX className="w-10 h-10 mb-3 text-muted-foreground/50" />
-                <p className="font-medium text-foreground">Could not load document</p>
-                <p className="text-muted-foreground mt-1 max-w-sm">{fileError}</p>
-              </>
-            )}
+                case 'image':
+                  return (
+                    <img
+                      src={fileUrl}
+                      alt="Document preview"
+                      className="max-w-full max-h-full object-contain rounded-md shadow-lg"
+                    />
+                  );
 
-            {documentId && !fileLoading && !fileError && fileUrl && fileType?.startsWith('image/') && (
-              <img
-                src={fileUrl}
-                alt="Document preview"
-                className="max-w-full max-h-full object-contain rounded-md shadow-lg"
-              />
-            )}
+                case 'download':
+                  return (
+                    <div className="flex flex-col items-center gap-3">
+                      <FileText className="w-10 h-10 text-muted-foreground/50" />
+                      <p className="font-medium text-foreground">No inline preview for {fileType}</p>
+                      <a
+                        href={fileUrl}
+                        download={`${documentId}${EXTENSION_BY_TYPE[fileType] || ''}`}
+                        className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'gap-1.5')}
+                      >
+                        <Download className="w-4 h-4" />
+                        Download file
+                      </a>
+                    </div>
+                  );
 
-            {documentId && !fileLoading && !fileError && fileUrl && fileType && !fileType.startsWith('image/') && (
-              <div className="flex flex-col items-center gap-3">
-                <FileText className="w-10 h-10 text-muted-foreground/50" />
-                <p className="font-medium text-foreground">No inline preview for {fileType}</p>
-                <a
-                  href={fileUrl}
-                  download={`${documentId}${EXTENSION_BY_TYPE[fileType] || ''}`}
-                  className={cn(buttonVariants({ size: 'sm', variant: 'outline' }), 'gap-1.5')}
-                >
-                  <Download className="w-4 h-4" />
-                  Download file
-                </a>
-              </div>
-            )}
+                case 'empty':
+                default:
+                  return (
+                    <>
+                      <FileText className="w-10 h-10 mb-3 text-muted-foreground/50" />
+                      <p className="text-muted-foreground">
+                        {documentId ? 'No preview available for this document.' : 'Select a document to preview.'}
+                      </p>
+                    </>
+                  );
+              }
+            })()}
           </div>
         </section>
 
