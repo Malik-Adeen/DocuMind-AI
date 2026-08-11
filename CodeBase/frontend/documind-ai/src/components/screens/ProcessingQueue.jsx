@@ -30,7 +30,7 @@ export default function ProcessingQueue({ queueItems, onUpdateItem, onDismissIte
       const hasInterval = intervalsRef.current[item.document_id];
 
       if (!isTerminal && !hasInterval) {
-        intervalsRef.current[item.document_id] = setInterval(async () => {
+        const check = async () => {
           try {
             const status = await getDocumentStatus(item.document_id);
             onUpdateItem(item.document_id, {
@@ -51,7 +51,9 @@ export default function ProcessingQueue({ queueItems, onUpdateItem, onDismissIte
               error: err instanceof ApiError ? err.message : 'Status check failed.',
             });
           }
-        }, 2000);
+        };
+        intervalsRef.current[item.document_id] = setInterval(check, 2000);
+        check();
       }
 
       if (isTerminal && hasInterval) {

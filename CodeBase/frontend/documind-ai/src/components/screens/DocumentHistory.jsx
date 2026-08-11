@@ -1,21 +1,56 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { listDocuments, ApiError } from '../../api/client';
 import { Card } from '@/components/ui/card';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Search, Eye, Trash2, ChevronLeft, ChevronRight, FileText, Receipt, FileCheck } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Search, Eye, Trash2, ChevronLeft, ChevronRight, FileText, AlertCircle, Loader2 } from 'lucide-react';
 
-export default function DocumentHistory({ documents, onSelectDocument, onDeleteDocument }) {
+const STATUS_VARIANT = {
+  complete: 'success',
+  needs_review: 'warning',
+  failed: 'destructive',
+};
+
+export default function DocumentHistory({ onSelectDocument }) {
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [pageSize, setPageSize] = useState(10);
   const [currentPage, setCurrentPage] = useState(1);
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listDocuments({})
+      .then((result) => {
+        if (!cancelled) setDocuments(result.items);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof ApiError ? err.message : 'Failed to load documents.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleDismiss = (documentId) => {
+    setDocuments((prev) => prev.filter((doc) => doc.document_id !== documentId));
+  };
+
   const filteredDocs = documents.filter((doc) =>
-    (doc.name && doc.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (doc.type && doc.type.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (doc.customer && doc.customer.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    (doc.ref && doc.ref.toLowerCase().includes(searchTerm.toLowerCase()))
+    doc.filename.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    doc.document_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    doc.status.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const totalPages = Math.ceil(filteredDocs.length / pageSize) || 1;
@@ -33,7 +68,7 @@ export default function DocumentHistory({ documents, onSelectDocument, onDeleteD
         <div className="w-full sm:w-64 relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search name, client, ID…"
+            placeholder="Search filename, type, status…"
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value);
@@ -44,61 +79,68 @@ export default function DocumentHistory({ documents, onSelectDocument, onDeleteD
         </div>
       </div>
 
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
       {/* Table Card */}
       <Card className="overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead>Filename</TableHead>
               <TableHead>Doc Type</TableHead>
-              <TableHead>Client / Customer</TableHead>
-              <TableHead>Ref Number</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Processed Date</TableHead>
-              <TableHead className="text-right">Confidence %</TableHead>
+              <TableHead>Uploaded</TableHead>
+              <TableHead className="text-right">Needs Review</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {paginatedDocs.length === 0 ? (
+            {loading ? (
               <TableRow>
-                <TableCell colSpan={7} className="h-32 text-center text-muted-foreground text-xs">
-                  No documents found matching query.
+                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-xs">
+                  <div className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading documents…
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : paginatedDocs.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="h-32 text-center text-muted-foreground text-xs">
+                  {error ? 'Could not load documents.' : 'No documents found.'}
                 </TableCell>
               </TableRow>
             ) : (
               paginatedDocs.map((doc) => (
                 <TableRow
-                  key={doc.id}
+                  key={doc.document_id}
                   onClick={() => onSelectDocument(doc)}
                   className="cursor-pointer"
                 >
                   <TableCell>
                     <div className="flex items-center gap-2 font-semibold text-foreground text-xs">
-                      {doc.type === 'Invoice' ? (
-                        <Receipt className="w-4 h-4 text-primary-light" />
-                      ) : (
-                        <FileText className="w-4 h-4 text-accent-foreground" />
-                      )}
-                      <span>{doc.type}</span>
+                      <FileText className="w-4 h-4 text-primary-light shrink-0" />
+                      <span className="truncate max-w-[220px]">{doc.filename}</span>
                     </div>
                   </TableCell>
 
-                  <TableCell className="text-foreground text-xs">{doc.customer}</TableCell>
-
-                  <TableCell className="font-label-md text-muted-foreground text-xs">{doc.ref}</TableCell>
+                  <TableCell className="font-label-md text-muted-foreground text-xs">{doc.document_type}</TableCell>
 
                   <TableCell>
-                    <Badge variant={doc.status === 'Processed' ? 'success' : doc.status === 'In Review' ? 'warning' : 'destructive'}>
-                      {doc.status}
-                    </Badge>
+                    <Badge variant={STATUS_VARIANT[doc.status] || 'default'}>{doc.status}</Badge>
                   </TableCell>
 
-                  <TableCell className="font-label-md text-muted-foreground text-xs">{doc.date}</TableCell>
+                  <TableCell className="font-label-md text-muted-foreground text-xs">{doc.uploaded_at}</TableCell>
 
                   <TableCell className={`text-right font-label-md text-xs font-semibold ${
-                    doc.score.startsWith('4') || doc.score.startsWith('5') ? 'text-destructive' : 'text-emerald-400'
+                    doc.needs_review_count > 0 ? 'text-destructive' : 'text-muted-foreground'
                   }`}>
-                    {doc.score}
+                    {doc.needs_review_count}
                   </TableCell>
 
                   <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
@@ -115,9 +157,9 @@ export default function DocumentHistory({ documents, onSelectDocument, onDeleteD
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => onDeleteDocument(doc.id)}
+                        onClick={() => handleDismiss(doc.document_id)}
                         className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                        title="Delete"
+                        title="Remove from this list"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>

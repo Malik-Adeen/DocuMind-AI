@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { setAuthToken, clearAuthToken } from './api/client';
+import { setAuthToken, clearAuthToken, getAuthToken } from './api/client';
 import Login from './components/screens/Login';
 import Dashboard from './components/screens/Dashboard';
 import UploadCenter from './components/screens/UploadCenter';
@@ -18,21 +18,12 @@ import { Input } from '@/components/ui/input';
 import { Search, Bell, Moon, Menu, X, LogOut, Cpu } from 'lucide-react';
 
 export default function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(getAuthToken()));
   const [view, setView] = useState('landing');
   const [activeScreen, setActiveScreen] = useState('Dashboard');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [queueItems, setQueueItems] = useState([]);
-
-  // Processed documents history state
-  const [processedDocuments, setProcessedDocuments] = useState([
-    { id: 'D-01', type: 'Invoice', customer: 'Acme Corp', ref: 'INV-2023-0891', status: 'Processed', date: '2023-10-24 14:32', score: '98.5%' },
-    { id: 'D-02', type: 'Contract', customer: 'Stark Industries', ref: 'NDA-STK-002', status: 'In Review', date: '2023-10-24 11:15', score: '72.1%' },
-    { id: 'D-03', type: 'Purchase Order', customer: 'Wayne Ent.', ref: 'PO-WAY-9932', status: 'Processed', date: '2023-10-23 09:45', score: '99.2%' },
-    { id: 'D-04', type: 'Invoice', customer: 'Internal HR', ref: 'HR-W4-2023-EMP12', status: 'Processed', date: '2023-10-22 16:20', score: '95.0%' },
-    { id: 'D-05', type: 'Invoice', customer: 'External Vendor', ref: 'ID-VND-884', status: 'Failed', date: '2023-10-22 10:05', score: '45.3%' },
-  ]);
 
   const [selectedReviewDoc, setSelectedReviewDoc] = useState(null);
 
@@ -76,10 +67,6 @@ export default function App() {
   const handleSelectDocument = (doc) => {
     setSelectedReviewDoc(doc.document_id || doc.id);
     setActiveScreen('Review');
-  };
-
-  const handleDeleteDocument = (id) => {
-    setProcessedDocuments((prev) => prev.filter((doc) => doc.id !== id));
   };
 
   if (!isAuthenticated) {
@@ -236,11 +223,7 @@ export default function App() {
             />
           )}
           {activeScreen === 'Documents' && (
-            <DocumentHistory
-              documents={processedDocuments}
-              onSelectDocument={handleSelectDocument}
-              onDeleteDocument={handleDeleteDocument}
-            />
+            <DocumentHistory onSelectDocument={handleSelectDocument} />
           )}
           {activeScreen === 'Review' && (
             <DocumentReview
