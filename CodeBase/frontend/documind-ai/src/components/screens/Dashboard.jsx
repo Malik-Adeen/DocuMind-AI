@@ -131,8 +131,8 @@ export default function Dashboard({ onViewChange }) {
             {recentDocs.map((doc, idx) => (
               <div key={idx} className="p-3 rounded-lg bg-muted/20 border border-border/30 hover:border-border/60 transition-colors space-y-1">
                 <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-foreground truncate max-w-[150px]">{doc.name}</span>
-                  <Badge variant={doc.status === 'Processed' ? 'success' : 'warning'} className="text-[9px]">
+                  <span className="font-semibold text-foreground truncate max-w-[150px]" title={doc.name}>{doc.name}</span>
+                  <Badge variant={doc.status === 'Processed' ? 'success' : 'warning'}>
                     {doc.status}
                   </Badge>
                 </div>

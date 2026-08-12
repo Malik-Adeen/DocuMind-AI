@@ -230,7 +230,7 @@ function LineItemsSection({ lineItems }) {
         {lineItems.map((item, i) => (
           <div key={i} className="p-3 rounded-lg border border-border/40 bg-muted/20 space-y-3">
             <FieldRow label="Description" field={item.description} />
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 gap-2.5">
               <FieldRow label="Qty" field={item.quantity} />
               <FieldRow label="Unit Price" field={item.unit_price} />
               <FieldRow label="Line Total" field={item.line_total} />
