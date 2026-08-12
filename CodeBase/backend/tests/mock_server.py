@@ -330,7 +330,7 @@ async def create_export(
         return error(401, "UNAUTHORIZED", "Missing or invalid bearer token.", False)
 
     fmt = payload.get("format", "xlsx")
-    if fmt not in {"xlsx", "csv", "json"}:
+    if fmt not in {"xlsx"}:
         return error(415, "UNSUPPORTED_TYPE", f"Unsupported export format {fmt}.", False)
 
     export_id = str(uuid.uuid4())

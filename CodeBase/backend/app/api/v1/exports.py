@@ -8,7 +8,6 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import current_user, get_db
-from app.core.config import Settings, get_settings
 from app.db.models import User
 from app.export.xlsx import MEDIA_TYPE
 from app.services.exports import artifact_bytes, create_export, export_payload, get_export
@@ -22,7 +21,6 @@ def create(
     payload: dict[str, Any],
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
 ) -> JSONResponse:
     trace = getattr(request.state, "trace_id", None)
     export = create_export(
@@ -30,10 +28,12 @@ def create(
         document_ids=[str(value) for value in payload.get("document_ids", [])],
         export_format=str(payload.get("format", "xlsx")),
         actor_id=user.id,
-        settings=settings,
         trace_id=uuid.UUID(str(trace)) if trace else None,
     )
-    return JSONResponse(status_code=202, content={"export_id": str(export.id), "status": "queued"})
+    return JSONResponse(
+        status_code=202,
+        content={"export_id": str(export.id), "status": export.status},
+    )
 
 
 @router.get("/{export_id}")

@@ -1,224 +1,356 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { listDocuments, createExport, getExportStatus, downloadExport, ApiError } from '../../api/client';
+import { Card } from '../ui/card';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../ui/table';
+import { Badge } from '../ui/badge';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { Alert, AlertDescription } from '../ui/alert';
+import {
+  Search,
+  FileSpreadsheet,
+  Download,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  AlertCircle,
+} from 'lucide-react';
+
+const TERMINAL_EXPORT_STATUSES = ['complete', 'failed'];
+
+const STATUS_VARIANT = {
+  complete: 'success',
+  needs_review: 'warning',
+  failed: 'destructive',
+};
 
 export default function ExportCenter() {
-  const [startDate, setStartDate] = useState('2023-10-01');
-  const [endDate, setEndDate] = useState('2023-10-31');
-  const [exports, setExports] = useState([
-    { id: 'EXP-8492', format: 'Excel', icon: 'table_view', colorClass: 'text-secondary', dateTime: '2023-10-24 14:32:01', size: '2.4 MB', status: 'Completed' },
-    { id: 'EXP-8491', format: 'JSON', icon: 'code', colorClass: 'text-primary', dateTime: '2023-10-24 10:15:44', size: '856 KB', status: 'Completed' },
-    { id: 'EXP-8490', format: 'PDF', icon: 'picture_as_pdf', colorClass: 'text-error', dateTime: '2023-10-23 16:45:12', size: '4.2 MB', status: 'Processing' },
-    { id: 'EXP-8489', format: 'CSV', icon: 'data_object', colorClass: 'text-tertiary', dateTime: '2023-10-22 09:05:33', size: '12.1 MB', status: 'Failed' },
-  ]);
+  const [documents, setDocuments] = useState([]);
+  const [loadingDocuments, setLoadingDocuments] = useState(false);
+  const [documentsError, setDocumentsError] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
 
-  const triggerExport = (format, icon, colorClass) => {
-    const newId = 'EXP-' + (Math.floor(Math.random() * 9000) + 1000);
-    const newExport = {
-      id: newId,
-      format: format,
-      icon: icon,
-      colorClass: colorClass,
-      dateTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      size: '-',
-      status: 'Processing'
+  const [exportsLog, setExportsLog] = useState([]);
+  const [triggerError, setTriggerError] = useState(null);
+  const intervalsRef = useRef({});
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingDocuments(true);
+    setDocumentsError(null);
+    listDocuments({})
+      .then((result) => {
+        if (!cancelled) setDocuments(result.items);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setDocumentsError(err instanceof ApiError ? err.message : 'Failed to load documents.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDocuments(false);
+      });
+    return () => {
+      cancelled = true;
     };
+  }, []);
 
-    setExports(prev => [newExport, ...prev]);
+  useEffect(() => {
+    return () => {
+      Object.values(intervalsRef.current).forEach(clearInterval);
+    };
+  }, []);
 
-    // Simulate completion
-    setTimeout(() => {
-      setExports(prev => 
-        prev.map(item => 
-          item.id === newId 
-            ? { ...item, status: 'Completed', size: (Math.random() * 5 + 0.5).toFixed(1) + ' MB' }
-            : item
-        )
-      );
-    }, 3000);
+  const filteredDocuments = documents.filter((doc) =>
+    doc.filename.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const toggleSelected = (documentId) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(documentId)) {
+        next.delete(documentId);
+      } else {
+        next.add(documentId);
+      }
+      return next;
+    });
   };
 
-  const handleRetry = (id) => {
-    setExports(prev => 
-      prev.map(item => 
-        item.id === id 
-          ? { ...item, status: 'Processing', size: '-' }
-          : item
-      )
-    );
-
-    setTimeout(() => {
-      setExports(prev => 
-        prev.map(item => 
-          item.id === id 
-            ? { ...item, status: 'Completed', size: (Math.random() * 5 + 0.5).toFixed(1) + ' MB' }
-            : item
-        )
-      );
-    }, 2500);
+  const toggleSelectAllFiltered = () => {
+    setSelectedIds((prev) => {
+      const allSelected = filteredDocuments.length > 0 && filteredDocuments.every((doc) => prev.has(doc.document_id));
+      const next = new Set(prev);
+      filteredDocuments.forEach((doc) => {
+        if (allSelected) {
+          next.delete(doc.document_id);
+        } else {
+          next.add(doc.document_id);
+        }
+      });
+      return next;
+    });
   };
+
+  const pollExport = (exportId) => {
+    intervalsRef.current[exportId] = setInterval(async () => {
+      try {
+        const status = await getExportStatus(exportId);
+        setExportsLog((prev) =>
+          prev.map((item) => (item.export_id === exportId ? { ...item, ...status } : item))
+        );
+        if (TERMINAL_EXPORT_STATUSES.includes(status.status)) {
+          clearInterval(intervalsRef.current[exportId]);
+          delete intervalsRef.current[exportId];
+        }
+      } catch (err) {
+        clearInterval(intervalsRef.current[exportId]);
+        delete intervalsRef.current[exportId];
+        setExportsLog((prev) =>
+          prev.map((item) =>
+            item.export_id === exportId
+              ? { ...item, status: 'failed', error: err instanceof ApiError ? err.message : 'Status check failed.' }
+              : item
+          )
+        );
+      }
+    }, 2000);
+  };
+
+  const handleTriggerExport = async () => {
+    setTriggerError(null);
+    const documentIds = Array.from(selectedIds);
+    if (documentIds.length === 0) return;
+    try {
+      const created = await createExport(documentIds, 'xlsx');
+      setExportsLog((prev) => [
+        {
+          export_id: created.export_id,
+          status: created.status,
+          document_count: documentIds.length,
+          download_url: null,
+          expires_at: null,
+          triggered_at: new Date().toISOString(),
+        },
+        ...prev,
+      ]);
+      setSelectedIds(new Set());
+      if (!TERMINAL_EXPORT_STATUSES.includes(created.status)) {
+        pollExport(created.export_id);
+      }
+    } catch (err) {
+      setTriggerError(err instanceof ApiError ? err.message : 'Failed to start export.');
+    }
+  };
+
+  const handleDownload = async (exportId) => {
+    try {
+      const blob = await downloadExport(exportId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `export-${exportId}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setTriggerError(err instanceof ApiError ? err.message : 'Failed to download export.');
+    }
+  };
+
+  const allFilteredSelected =
+    filteredDocuments.length > 0 && filteredDocuments.every((doc) => selectedIds.has(doc.document_id));
 
   return (
-    <div className="flex flex-col gap-stack-lg w-full max-w-7xl mx-auto p-4 md:p-6 lg:p-10 animate-fadeIn">
-      {/* Page Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-stack-md border-b border-white/10 pb-4">
+    <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto p-4 md:p-6 lg:p-8 animate-fadeIn">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-surface">Export Center</h2>
-          <p className="font-body-md text-body-md text-on-surface-variant mt-2">Manage and download your extracted data intelligence.</p>
+          <h2 className="font-headline-lg text-2xl font-bold text-foreground">Export Center</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Select documents and export their extracted, gate-verified fields to Excel.
+          </p>
         </div>
-        
-        {/* Filter: Date Range */}
-        <div className="flex items-center gap-2 bg-surface-container-high rounded-lg p-2 border border-white/5 text-sm">
-          <span className="material-symbols-outlined text-on-surface-variant text-base">calendar_today</span>
-          <input 
-            className="bg-transparent border-none text-on-surface font-label-md text-xs focus:ring-0 cursor-pointer outline-none" 
-            type="date" 
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-          />
-          <span className="text-on-surface-variant">-</span>
-          <input 
-            className="bg-transparent border-none text-on-surface font-label-md text-xs focus:ring-0 cursor-pointer outline-none" 
-            type="date" 
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
+        <div className="w-full sm:w-64 relative">
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search by filename…"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="pl-9 h-9"
           />
         </div>
       </div>
 
-      {/* Export Options Bento Grid */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-stack-md">
-        
-        {/* Export to Excel */}
-        <button 
-          onClick={() => triggerExport('Excel', 'table_view', 'text-secondary')}
-          className="glass-card relative rounded-xl p-6 flex flex-col items-start gap-4 group hover:bg-white/5 transition-all text-left cursor-pointer border border-transparent hover:border-primary/30"
-        >
-          <div className="p-3 bg-secondary-container/20 rounded-lg text-secondary">
-            <span className="material-symbols-outlined text-[32px]">table_view</span>
-          </div>
-          <div>
-            <h3 className="font-headline-md text-headline-md text-on-surface group-hover:text-primary transition-colors">Excel</h3>
-            <p className="font-body-sm text-xs text-on-surface-variant mt-1">Structured spreadsheet format (.xlsx)</p>
-          </div>
-          <span className="material-symbols-outlined absolute top-6 right-6 text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">arrow_forward</span>
-        </button>
+      {documentsError && (
+        <Alert variant="destructive">
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>{documentsError}</AlertDescription>
+        </Alert>
+      )}
 
-        {/* Export to CSV */}
-        <button 
-          onClick={() => triggerExport('CSV', 'data_object', 'text-tertiary')}
-          className="glass-card relative rounded-xl p-6 flex flex-col items-start gap-4 group hover:bg-white/5 transition-all text-left cursor-pointer border border-transparent hover:border-primary/30"
-        >
-          <div className="p-3 bg-tertiary-container/20 rounded-lg text-tertiary">
-            <span className="material-symbols-outlined text-[32px]">data_object</span>
-          </div>
-          <div>
-            <h3 className="font-headline-md text-headline-md text-on-surface group-hover:text-tertiary transition-colors">CSV</h3>
-            <p className="font-body-sm text-xs text-on-surface-variant mt-1">Comma-separated values (.csv)</p>
-          </div>
-          <span className="material-symbols-outlined absolute top-6 right-6 text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">arrow_forward</span>
-        </button>
+      {triggerError && (
+        <Alert variant="destructive">
+          <AlertCircle className="w-4 h-4" />
+          <AlertDescription>{triggerError}</AlertDescription>
+        </Alert>
+      )}
 
-        {/* Export to JSON */}
-        <button 
-          onClick={() => triggerExport('JSON', 'code', 'text-primary')}
-          className="glass-card relative rounded-xl p-6 flex flex-col items-start gap-4 group hover:bg-white/5 transition-all text-left cursor-pointer border border-transparent hover:border-primary/30"
-        >
-          <div className="p-3 bg-primary-container/20 rounded-lg text-primary">
-            <span className="material-symbols-outlined text-[32px]">code</span>
-          </div>
-          <div>
-            <h3 className="font-headline-md text-headline-md text-on-surface group-hover:text-primary transition-colors">JSON</h3>
-            <p className="font-body-sm text-xs text-on-surface-variant mt-1">Raw nested data structures (.json)</p>
-          </div>
-          <span className="material-symbols-outlined absolute top-6 right-6 text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">arrow_forward</span>
-        </button>
-
-        {/* Export to PDF */}
-        <button 
-          onClick={() => triggerExport('PDF', 'picture_as_pdf', 'text-error')}
-          className="glass-card relative rounded-xl p-6 flex flex-col items-start gap-4 group hover:bg-white/5 transition-all text-left cursor-pointer border border-transparent hover:border-error/30"
-        >
-          <div className="p-3 bg-error-container/20 rounded-lg text-error">
-            <span className="material-symbols-outlined text-[32px]">picture_as_pdf</span>
-          </div>
-          <div>
-            <h3 className="font-headline-md text-headline-md text-on-surface group-hover:text-error transition-colors">PDF</h3>
-            <p className="font-body-sm text-xs text-on-surface-variant mt-1">Formatted summary report (.pdf)</p>
-          </div>
-          <span className="material-symbols-outlined absolute top-6 right-6 text-on-surface-variant opacity-0 group-hover:opacity-100 transition-opacity">arrow_forward</span>
-        </button>
-      </section>
-
-      {/* History Table */}
-      <section className="glass-card rounded-xl overflow-hidden relative">
-        <div className="px-6 py-4 border-b border-white/10 flex justify-between items-center bg-surface-container-low/50">
-          <h3 className="font-headline-md text-headline-md text-on-surface text-lg">Recent Exports</h3>
-          <span className="text-on-surface-variant font-label-md text-xs">Exports Log</span>
+      {/* Document Picker */}
+      <Card className="overflow-hidden">
+        <div className="px-6 py-4 border-b border-border/40 bg-muted/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <span className="text-sm font-semibold text-foreground">
+            {selectedIds.size > 0 ? `${selectedIds.size} document${selectedIds.size === 1 ? '' : 's'} selected` : 'Select documents to export'}
+          </span>
+          <Button size="sm" onClick={handleTriggerExport} disabled={selectedIds.size === 0} className="gap-1.5">
+            <FileSpreadsheet className="w-4 h-4" />
+            Export to Excel
+          </Button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-surface-container/30 border-b border-white/5 font-label-md text-xs text-on-surface-variant">
-                <th className="px-6 py-3 font-medium">Export ID</th>
-                <th className="px-6 py-3 font-medium">Format</th>
-                <th className="px-6 py-3 font-medium">Date / Time</th>
-                <th className="px-6 py-3 font-medium">Size</th>
-                <th className="px-6 py-3 font-medium">Status</th>
-                <th className="px-6 py-3 font-medium text-right">Action</th>
-              </tr>
-            </thead>
-            <tbody className="font-body-sm text-sm text-on-surface divide-y divide-white/5">
-              {exports.map((item) => (
-                <tr key={item.id} className="hover:bg-white/[0.02] transition-colors">
-                  <td className="px-6 py-3.5 font-label-md text-primary text-xs">{item.id}</td>
-                  <td className="px-6 py-3.5 flex items-center gap-2">
-                    <span className={`material-symbols-outlined ${item.colorClass} text-base`}>{item.icon}</span> 
-                    <span className="font-semibold">{item.format}</span>
-                  </td>
-                  <td className="px-6 py-3.5 font-label-md text-on-surface-variant text-xs">{item.dateTime}</td>
-                  <td className="px-6 py-3.5 font-label-md text-xs">{item.size}</td>
-                  <td className="px-6 py-3.5">
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-label-md ${
-                      item.status === 'Completed'
-                        ? 'bg-green-500/10 text-green-400'
-                        : item.status === 'Processing'
-                        ? 'bg-yellow-500/10 text-yellow-400'
-                        : 'bg-error-container/20 text-error'
-                    }`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        item.status === 'Completed' ? 'bg-green-400' : item.status === 'Processing' ? 'bg-yellow-400 animate-pulse' : 'bg-error'
-                      }`}></span> 
-                      {item.status}
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <input
+                  type="checkbox"
+                  className="rounded border-border bg-background text-primary focus:ring-primary cursor-pointer"
+                  checked={allFilteredSelected}
+                  onChange={toggleSelectAllFiltered}
+                  aria-label="Select all filtered documents"
+                />
+              </TableHead>
+              <TableHead>Filename</TableHead>
+              <TableHead>Doc Type</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Uploaded</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {loadingDocuments ? (
+              <TableRow>
+                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground text-xs">
+                  <div className="flex items-center justify-center gap-2">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Loading documents…
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : filteredDocuments.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="h-32 text-center text-muted-foreground text-xs">
+                  No documents found.
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredDocuments.map((doc) => (
+                <TableRow
+                  key={doc.document_id}
+                  onClick={() => toggleSelected(doc.document_id)}
+                  className="cursor-pointer"
+                >
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      className="rounded border-border bg-background text-primary focus:ring-primary cursor-pointer"
+                      checked={selectedIds.has(doc.document_id)}
+                      onChange={() => toggleSelected(doc.document_id)}
+                      aria-label={`Select ${doc.filename}`}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <span className="font-semibold text-foreground text-xs truncate max-w-[240px] block" title={doc.filename}>
+                      {doc.filename}
                     </span>
-                  </td>
-                  <td className="px-6 py-3.5 text-right">
-                    {item.status === 'Completed' ? (
-                      <a 
-                        className="text-primary hover:text-primary-fixed transition-colors font-label-md text-xs font-semibold" 
-                        href={`#download-${item.id}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          alert(`Downloading ${item.format} file (${item.size})...`);
-                        }}
-                      >
-                        Download
-                      </a>
-                    ) : item.status === 'Failed' ? (
-                      <button 
-                        onClick={() => handleRetry(item.id)}
-                        className="text-primary hover:underline transition-colors font-label-md text-xs font-semibold cursor-pointer"
-                      >
-                        Retry
-                      </button>
-                    ) : (
-                      <span className="text-on-surface-variant font-label-md text-xs cursor-not-allowed">Processing</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </TableCell>
+                  <TableCell className="font-label-md text-muted-foreground text-xs">{doc.document_type}</TableCell>
+                  <TableCell>
+                    <Badge variant={STATUS_VARIANT[doc.status] || 'default'}>{doc.status}</Badge>
+                  </TableCell>
+                  <TableCell className="font-label-md text-muted-foreground text-xs">{doc.uploaded_at}</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </Card>
+
+      {/* Export History (session-local — no export-listing endpoint exists) */}
+      <Card className="overflow-hidden">
+        <div className="px-6 py-4 border-b border-border/40 bg-muted/20 flex justify-between items-center">
+          <h3 className="text-sm font-semibold text-foreground">Session Export History</h3>
+          <span className="text-xs font-label-md text-muted-foreground">Excel (.xlsx)</span>
         </div>
-      </section>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Export ID</TableHead>
+              <TableHead>Documents</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Triggered</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {exportsLog.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground text-xs">
+                  No exports triggered in this session yet.
+                </TableCell>
+              </TableRow>
+            ) : (
+              exportsLog.map((item) => (
+                <TableRow key={item.export_id}>
+                  <TableCell className="font-label-md text-xs text-foreground">{item.export_id}</TableCell>
+                  <TableCell className="font-label-md text-xs text-muted-foreground">
+                    {item.document_count} document{item.document_count === 1 ? '' : 's'}
+                  </TableCell>
+                  <TableCell>
+                    {item.status === 'complete' ? (
+                      <Badge variant="success" className="gap-1">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Complete
+                      </Badge>
+                    ) : item.status === 'failed' ? (
+                      <Badge variant="destructive" className="gap-1">
+                        <XCircle className="w-3 h-3" />
+                        Failed
+                      </Badge>
+                    ) : (
+                      <Badge variant="default" className="gap-1 animate-pulse">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                        Queued
+                      </Badge>
+                    )}
+                    {item.error && (
+                      <p className="text-destructive text-[11px] font-label-md mt-1">{item.error}</p>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-label-md text-xs text-muted-foreground">
+                    {new Date(item.triggered_at).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {item.status === 'complete' ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDownload(item.export_id)}
+                        className="gap-1.5 text-xs"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download
+                      </Button>
+                    ) : (
+                      <span className="text-muted-foreground font-label-md text-xs">
+                        {item.status === 'failed' ? '—' : 'Processing…'}
+                      </span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </Card>
     </div>
   );
 }

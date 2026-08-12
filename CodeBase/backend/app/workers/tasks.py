@@ -3,12 +3,15 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 
 from app.core.config import get_settings
-from app.db.models import Document
+from app.db.models import Document, Export
 from app.db.session import get_sessionmaker
+from app.export.xlsx import write_workbook
 from app.pipeline.llm.client import DeploymentProfile, Endpoint, LLMClient
 from app.pipeline.llm.transport import HostedChatTransport
 from app.pipeline.ocr.paddle import PaddleLatinOCR
@@ -16,6 +19,8 @@ from app.pipeline.orchestrator import OCRReader, OrchestratorError, run_and_pers
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger("app")
+
+EXPORT_TTL_HOURS = 24
 
 
 def _default_ocr_reader() -> OCRReader:
@@ -77,4 +82,37 @@ def extract_document(document_id: str) -> None:
             document.status = "failed"
             session.commit()
             logger.error("extract_document: %s failed unexpectedly: %s", document_id, exc)
+            raise
+
+
+@celery_app.task(name="app.workers.generate_export")  # type: ignore[untyped-decorator]
+def generate_export(export_id: str) -> None:
+    with get_sessionmaker()() as session:
+        export = session.get(Export, uuid.UUID(export_id))
+        if export is None:
+            logger.warning("generate_export: no such export %s", export_id)
+            return
+        if export.status != "queued":
+            logger.info("generate_export: export %s already %s, skipping", export_id, export.status)
+            return
+        try:
+            parsed_ids: list[uuid.UUID] = []
+            for raw in export.document_ids:
+                try:
+                    parsed_ids.append(uuid.UUID(str(raw)))
+                except ValueError:
+                    continue
+
+            settings = get_settings()
+            target = Path(settings.export_dir) / f"export-{export.id}.xlsx"
+            write_workbook(session, document_ids=parsed_ids, target=target)
+
+            export.artifact_path = str(target)
+            export.status = "complete"
+            export.expires_at = datetime.now(UTC) + timedelta(hours=EXPORT_TTL_HOURS)
+            session.commit()
+        except Exception as exc:
+            export.status = "failed"
+            session.commit()
+            logger.error("generate_export: %s failed unexpectedly: %s", export_id, exc)
             raise
