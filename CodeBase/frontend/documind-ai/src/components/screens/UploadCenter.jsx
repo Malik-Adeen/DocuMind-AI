@@ -6,18 +6,19 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { UploadCloud, FileUp, FileCheck, AlertCircle, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
 
+const MAX_FILES_PER_DROP = 20;
+
 export default function UploadCenter({ onAddDocumentToQueue }) {
   const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const fileInputRef = useRef(null);
+  const nextUploadId = useRef(0);
 
   const formatSize = (bytes) => (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 
   const submitFile = async (file) => {
-    setUploadError('');
-
-    const uploadId = Date.now();
+    const uploadId = `${Date.now()}-${nextUploadId.current++}`;
     const pendingUpload = {
       id: uploadId,
       name: file.name,
@@ -52,6 +53,27 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
     }
   };
 
+  const submitFiles = (fileList) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    setUploadError('');
+
+    let toUpload = files;
+    if (files.length > MAX_FILES_PER_DROP) {
+      toUpload = files.slice(0, MAX_FILES_PER_DROP);
+      setUploadError(
+        `${files.length} files selected — only the first ${MAX_FILES_PER_DROP} were queued (limit is ${MAX_FILES_PER_DROP} files per drop).`
+      );
+    }
+
+    // Fire one POST /documents per file, concurrently — the processing queue
+    // already serializes the actual OCR/LLM work on the backend.
+    toUpload.forEach((file) => {
+      submitFile(file);
+    });
+  };
+
   const handleDragOver = (e) => {
     e.preventDefault();
     setDragging(true);
@@ -64,14 +86,14 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
   const handleDrop = (e) => {
     e.preventDefault();
     setDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      submitFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      submitFiles(e.dataTransfer.files);
     }
   };
 
   const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      submitFile(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      submitFiles(e.target.files);
     }
     e.target.value = '';
   };
@@ -104,6 +126,7 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
         onChange={handleFileChange}
         className="hidden"
         accept=".pdf,.png,.jpg,.jpeg,.tiff"
+        multiple
       />
 
       {/* Drag & Drop Upload Zone */}
@@ -122,10 +145,10 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
           <UploadCloud className="w-10 h-10" />
         </div>
         <h3 className="font-headline-md text-base font-semibold text-foreground mb-1">
-          {dragging ? 'Drop the document file here' : 'Drag and drop document files here'}
+          {dragging ? 'Drop document files here' : 'Drag and drop document files here'}
         </h3>
         <p className="text-xs text-muted-foreground mb-5">
-          or click anywhere to browse from your device
+          or click anywhere to browse from your device — select multiple files, up to {MAX_FILES_PER_DROP} at a time
         </p>
         <Button variant="outline" size="sm" onClick={handleBrowseClick} className="gap-2 mb-6">
           <FileUp className="w-4 h-4" />
