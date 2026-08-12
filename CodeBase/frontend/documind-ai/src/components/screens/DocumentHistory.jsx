@@ -125,7 +125,7 @@ export default function DocumentHistory({ onSelectDocument }) {
                   <TableCell>
                     <div className="flex items-center gap-2 font-semibold text-foreground text-xs">
                       <FileText className="w-4 h-4 text-primary-light shrink-0" />
-                      <span className="truncate max-w-[220px]">{doc.filename}</span>
+                      <span className="truncate max-w-[220px]" title={doc.filename}>{doc.filename}</span>
                     </div>
                   </TableCell>
 

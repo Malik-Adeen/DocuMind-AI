@@ -161,7 +161,7 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-1">
-                    <span className="font-label-md text-xs font-semibold text-foreground truncate pr-4">{upload.name}</span>
+                    <span className="font-label-md text-xs font-semibold text-foreground truncate pr-4" title={upload.name}>{upload.name}</span>
                     {upload.status === 'uploading' ? (
                       <Loader2 className="w-4 h-4 text-primary animate-spin" />
                     ) : upload.status === 'failed' ? (

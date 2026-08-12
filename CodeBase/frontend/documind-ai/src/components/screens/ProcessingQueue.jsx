@@ -184,7 +184,7 @@ export default function ProcessingQueue({ queueItems, onUpdateItem, onDismissIte
                         ) : (
                           <ImageIcon className="w-4 h-4 text-accent-foreground shrink-0" />
                         )}
-                        <span className="font-semibold text-foreground truncate max-w-[240px] text-xs">
+                        <span className="font-semibold text-foreground truncate max-w-[240px] text-xs" title={item.filename}>
                           {item.filename}
                         </span>
                       </div>

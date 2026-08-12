@@ -151,10 +151,10 @@ export default function UserManagement() {
                   )}
                 </div>
                 <div className="flex flex-col min-w-0 pr-2">
-                  <span className={`font-semibold truncate ${user.pending ? 'text-on-surface-variant italic' : 'text-white'}`}>
+                  <span className={`font-semibold truncate ${user.pending ? 'text-on-surface-variant italic' : 'text-white'}`} title={user.name}>
                     {user.name} {user.pending && '(Pending)'}
                   </span>
-                  <span className="font-label-md text-[11px] text-on-surface-variant truncate">{user.email}</span>
+                  <span className="font-label-md text-[11px] text-on-surface-variant truncate" title={user.email}>{user.email}</span>
                 </div>
               </div>
               
