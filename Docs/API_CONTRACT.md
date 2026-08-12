@@ -1,13 +1,13 @@
 ---
 status: draft
 owner: Adeen & Frontend
-last_reviewed: 2026-08-11
-version: 0.3.2
+last_reviewed: 2026-08-12
+version: 0.3.3
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.2 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.3.3 · **Status:** Draft — freeze before frontend work starts
 **Owners:** backend (Adeen) + frontend (friend). Changes require both.
 
 > ✅ **Implemented.** Every endpoint below is now served by the real application
@@ -244,17 +244,30 @@ endpoint that moves a document from local-only to hosted-eligible after the fact
 
 ```
 POST /api/v1/exports
-{ "document_ids": ["uuid", ...], "format": "xlsx" }   // xlsx | csv | json
+{ "document_ids": ["uuid", ...], "format": "xlsx" }   // xlsx only for now — csv | json reserved, not implemented
 → 202 { "export_id": "uuid", "status": "queued" }
+→ 415 { "code": "UNSUPPORTED_TYPE", ... } format is not "xlsx"
 
 GET /api/v1/exports/{id}
-→ 200 { "status": "complete", "download_url": "/api/v1/exports/{id}/file", "expires_at": "..." }
+→ 200 { "status": "queued" | "complete" | "failed", "download_url": "/api/v1/exports/{id}/file", "expires_at": "..." }
 
 GET /api/v1/exports/{id}/file
 → 200 binary stream
 ```
 
 Column order for `xlsx` is fixed and derived from `EXTRACTION_SCHEMA.json` field order.
+
+**Only `xlsx` is implemented (0.3.3).** The schema still names `csv` and `json` as future values —
+sending either today gets `415 UNSUPPORTED_TYPE`, same as any other unsupported format.
+
+**Unverified/format_only fields in the xlsx output** are never rewritten — the cell keeps the exact
+decimal string (or is blank) the API would return for that field. Instead: the cell gets an amber
+fill, an attached comment naming the reason (the gate's `gate_error` text, or a generic
+"no deterministic gate covers this field" note when no gate applies), and the row gets one extra
+trailing column, `Unverified Fields`, listing every unverified field name in that row
+(comma-separated). A field with no value at all is left blank and unflagged — there is nothing to
+distrust in an empty cell. **Frontend: do not treat a colored/commented cell as a parsing hint** —
+column position and header name are still the only contract; the styling is a human signal only.
 
 ---
 

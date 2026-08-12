@@ -211,8 +211,10 @@ def client(under_test: str, request: pytest.FixtureRequest) -> Iterator[TestClie
 
     if under_test == "real":
         from app.services.documents import join_extraction_threads
+        from app.services.exports import join_export_threads
 
         join_extraction_threads()
+        join_export_threads()
 
 
 def _login(client: TestClient, email: str) -> dict[str, str]:
