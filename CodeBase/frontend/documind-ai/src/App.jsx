@@ -51,7 +51,6 @@ export default function App() {
       },
       ...prev,
     ]);
-    setActiveScreen('Processing');
   };
 
   const handleUpdateQueueItem = (documentId, patch) => {
