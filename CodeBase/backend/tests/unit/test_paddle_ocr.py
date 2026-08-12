@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,6 +15,17 @@ from app.pipeline.ocr.paddle import (
 )
 
 PAGE = (1000, 500)
+
+
+def make_pdf(path: Path, page_sizes: Sequence[tuple[float, float]]) -> Path:
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument.new()
+    for width, height in page_sizes:
+        doc.new_page(width, height)
+    doc.save(str(path))
+    doc.close()
+    return path
 
 
 def result(**overrides: Any) -> dict[str, Any]:
@@ -37,6 +49,19 @@ class FakeEngine:
     def predict(self, input: str) -> Sequence[Mapping[str, Any]]:
         self.calls.append(input)
         return self.results
+
+
+class SizeRecordingEngine(FakeEngine):
+    def __init__(self, results: Sequence[Mapping[str, Any]]) -> None:
+        super().__init__(results)
+        self.sizes: list[tuple[int, int]] = []
+
+    def predict(self, input: str) -> Sequence[Mapping[str, Any]]:
+        from PIL import Image
+
+        with Image.open(input) as image:
+            self.sizes.append((image.width, image.height))
+        return super().predict(input)
 
 
 class CountingLoader:
@@ -136,6 +161,34 @@ def test_detection_polygons_are_the_fallback() -> None:
 def test_pages_are_stamped_on_every_region() -> None:
     ocr, _ = reader(result())
     assert {region.page for region in ocr.read("scan.png", page=4, size=PAGE)} == {4}
+
+
+def test_a_pdf_is_rasterized_to_a_temporary_png_before_ocr(tmp_path: Path) -> None:
+    pdf_path = make_pdf(tmp_path / "doc.pdf", [(400, 200)])
+    ocr, loader = reader(result())
+
+    regions = ocr.read(pdf_path)
+
+    assert regions
+    called_path = loader.engine.calls[0]
+    assert called_path.endswith(".png")
+    assert called_path != str(pdf_path)
+    assert not Path(called_path).exists()
+
+
+def test_pdf_page_argument_is_zero_indexed_into_pypdfium2(tmp_path: Path) -> None:
+    pdf_path = make_pdf(tmp_path / "doc.pdf", [(400, 200), (200, 400)])
+    engine = SizeRecordingEngine([result()])
+    loader = CountingLoader(engine)
+    ocr = PaddleLatinOCR(loader=loader)
+
+    ocr.read(pdf_path, page=1)
+    ocr.read(pdf_path, page=2)
+
+    first_width, first_height = engine.sizes[0]
+    second_width, second_height = engine.sizes[1]
+    assert first_width > first_height
+    assert second_height > second_width
 
 
 def test_multiple_engine_results_are_flattened() -> None:

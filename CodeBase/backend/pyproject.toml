@@ -34,6 +34,7 @@ ocr = [
     "paddleocr>=3.0",
     # CPU build. GPU inference needs paddlepaddle-gpu from PaddlePaddle's CUDA index instead.
     "paddlepaddle==3.0.0",
+    "pypdfium2>=5.0",
 ]
 
 [tool.uv]
@@ -63,6 +64,10 @@ explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = ["paddleocr.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pypdfium2.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

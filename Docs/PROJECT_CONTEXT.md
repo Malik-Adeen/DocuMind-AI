@@ -142,10 +142,6 @@ Keep this list short and honest. Move items to a decision below once resolved.
 
 ### Known gaps — recorded, not fixed
 
-- [ ] **PDF uploads are accepted but cannot be processed.** [[API_CONTRACT]] §2 advertises
-      `file: <pdf|png|jpg|tiff>`, but the OCR path (`backend/app/pipeline/ocr/paddle.py`,
-      `Image.open(image_path)`) calls `PIL.Image.open` directly, which cannot read a PDF. A PDF
-      is accepted at upload, queued, and only fails once OCR actually runs on it.
 - [ ] **`/status.error` is always `null`.** `status_payload()`
       (`backend/app/services/documents.py`) hardcodes `"error": None` regardless of the actual
       failure cause — a refused hosted-LLM call, a PaddleOCR crash, and any other failure all
