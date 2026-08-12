@@ -28,6 +28,60 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-12 — frontend wired end-to-end against the real API; `_needs_review`'s vacuous `all()` fixed (ADR-011); full real path reverified clean to `needs_review`
+
+**Touched:** no INV directly (see Learned/broke for what ADR-011 protects) ·
+`CodeBase/frontend/documind-ai/**` (API client, Login, UploadCenter, ProcessingQueue polling,
+DocumentHistory, DocumentReview incl. source-file preview + in-place PATCH correction, shadcn/ui
+restyle), `CodeBase/backend/app/main.py` (CORS middleware), `CodeBase/backend/app/api/v1/documents.py`
+(`GET /documents/{id}/file`), `CodeBase/backend/app/pipeline/orchestrator.py`
+(`document.document_type` now persisted post-extraction; `_needs_review`'s `if not populated: return
+True` — ADR-011)
+
+**Did:** Wired `CodeBase/frontend/documind-ai` end to end against the real backend for the first
+time: API client, login, upload, processing-queue polling, real document list, and the review
+screen rendering real extraction data with a source-file preview and in-place field correction via
+`PATCH` — restyled onto shadcn/ui, gate grouping and the verified/confidence badge distinction
+preserved. Backend: added `GET /documents/{id}/file` (streams the raw upload via `FileResponse`,
+gated only on auth, never on processing status, never writes to `storage_path` — INV-3), added CORS
+middleware for the Vite dev origin (`localhost:5173`), fixed `document_type` to persist onto the
+`documents` row after extraction (`orchestrator.py` — it was set once at upload as `"unknown"` and
+never updated), and fixed `_needs_review`'s `all()` over an empty populated-fields list returning
+vacuously `True` (now `[[ADR-011-terminal-status-requires-positive-verification-evidence]]`). With
+the frontend now in place, re-ran the full real path — `paddlepaddle==3.0.0` (pinned 2026-08-10
+after `3.3.1`'s oneDNN crash, see that entry) still holds — end to end: upload → PaddleOCR → hosted
+LLM → gates → persist → rendered in the new review screen. Both line items extracted this run
+(2026-08-10's run dropped one); `line_item_sum` and `arithmetic_reconciliation` both passed;
+document reached `"needs_review"`.
+
+**Learned / broke:**
+- `_needs_review`'s `all(entry.get("verified") for entry in populated)` is vacuously `True` over an
+  empty sequence — `all([])` — so an extraction that populated *no* fields at all (not "all fields
+  unverified," genuinely none) satisfied the check and reached `"complete"` with
+  `review.required: false`. That's backwards: terminal status must come from positive verification
+  evidence, not merely the absence of an unverified field. Fixed to require at least one populated,
+  gate-verified field before `"complete"` is reachable.
+- Clearing a field in the review screen sends `value: null` in the PATCH body, not `""` — traced
+  end to end: the frontend maps an emptied input to `null` before sending, and the backend's
+  `CURRENT_EXTRACTION_VIEW` query (`app/db/queries.py`, unchanged this session but exercised
+  end-to-end for the first time) renders that as JSON `null` via `to_jsonb`, while still stamping
+  `verified: true, source.origin: "human"`. A human asserting "this field is genuinely absent" is a
+  legitimate verified state, distinct from both "never extracted" and "unverified" — collapsing it
+  to an empty string would have made a deliberate human judgment indistinguishable from an untouched
+  field.
+- A separate agent session working in the same tree left unapproved changes uncommitted — a
+  repo-wide `@/...` → relative-import rewrite (the alias was never broken; `vite.config.js` still
+  defines it) and an `index.css` rewrite that dropped both `@layer base` wrappers, the global
+  `* { @apply border-border }` rule, and the `.animate-laser` keyframe. It sat mixed in with
+  approved edits in the same working tree, close enough to riding into a commit that it had to be
+  separated out by hand (`git stash`, then reconstructing the approved-only diff file by file, since
+  the alias rewrite and the CSS rewrite touched some of the same files as the approved fixes). Read
+  the diff before committing, every time — a passing build is not evidence a diff is small or clean.
+
+**Next:** none of today's four known gaps (PDF upload path, silent `/status.error`, unbuildable
+NTN/STRN gates, ADR-009's arithmetic-identity blind spot) are fixed — recorded in
+`PROJECT_CONTEXT.md` §7 this session, not addressed.
+
 ## 2026-08-10 — first full real-path run: real OCR, real hosted LLM, real gates, 34.41s to `needs_review`
 
 **Touched:** no INV · `backend/pyproject.toml`, `backend/uv.lock` (`ocr` group pins
