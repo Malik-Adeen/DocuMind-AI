@@ -140,6 +140,24 @@ Keep this list short and honest. Move items to a decision below once resolved.
       Answering it needs real PTCL documents in the golden set, and probably a `months` field
       read from `billing_terms`.
 
+### Known gaps — recorded, not fixed
+
+- [ ] **`/status.error` is always `null`.** `status_payload()`
+      (`backend/app/services/documents.py`) hardcodes `"error": None` regardless of the actual
+      failure cause — a refused hosted-LLM call, a PaddleOCR crash, and any other failure all
+      look identical to the caller. Nothing in the API today distinguishes them.
+- [ ] **Two of eight gates are unbuildable as designed.** The gate registry names
+      `ntn_format_check` and `strn_format_check`, but [[EXTRACTION_SCHEMA.json]]'s `fields` block
+      has no `ntn`/`strn` field for either to check against. First found 2026-08-10 ([[JOURNAL]]),
+      still unfixed.
+- [ ] **[[ADR-009-omission-is-invisible-to-the-gate-layer]] needs amending — its claim isn't true
+      for every gate.** ADR-009 holds that no gate should be expected to catch field omission. The
+      2026-08-10 real-path run ([[JOURNAL]]) showed `line_item_sum` doing exactly that: the model
+      dropped a line item from `line_items` entirely, and the gate failed on the resulting
+      arithmetic mismatch. Omission is invisible to the gate layer only when the omitted value
+      doesn't participate in an arithmetic identity another gate checks — ADR-009's claim needs
+      narrowing, not reversing.
+
 ## 8. Decision log
 
 Append-only. Each decision is an ADR in [`decisions/`](./decisions/) — context, reasoning,

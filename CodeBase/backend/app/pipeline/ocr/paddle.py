@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import Any, Protocol
 
 ENGINE_VERSION = "paddleocr-pp-ocrv5"
 ORIGIN = "ocr_latin"
+PDF_RASTER_DPI = 200
 
 POLY_KEYS = ("rec_polys", "dt_polys")
 BOX_KEYS = ("rec_boxes",)
@@ -123,6 +125,25 @@ def image_size(image_path: Path) -> tuple[int, int]:
         return image.width, image.height
 
 
+def _rasterize_pdf_page(pdf_path: Path, page: int, dpi: int = PDF_RASTER_DPI) -> Path:
+    import pypdfium2 as pdfium
+
+    pdf = pdfium.PdfDocument(str(pdf_path))
+    try:
+        pdf_page = pdf[page - 1]
+        try:
+            image = pdf_page.render(scale=dpi / 72).to_pil()
+        finally:
+            pdf_page.close()
+    finally:
+        pdf.close()
+
+    fd, raster_path = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    image.save(raster_path)
+    return Path(raster_path)
+
+
 @dataclass(slots=True)
 class PaddleLatinOCR:
     loader: EngineLoader = load_pp_ocrv5
@@ -142,11 +163,19 @@ class PaddleLatinOCR:
         size: tuple[int, int] | None = None,
     ) -> list[TextRegion]:
         path = Path(image_path)
-        width, height = size if size is not None else image_size(path)
-        if width <= 0 or height <= 0:
-            raise OCREngineError(f"image {path} reports a {width}x{height} page")
+        raster_path: Path | None = None
+        if path.suffix.lower() == ".pdf":
+            raster_path = _rasterize_pdf_page(path, page)
+        engine_path = raster_path if raster_path is not None else path
+        try:
+            width, height = size if size is not None else image_size(engine_path)
+            if width <= 0 or height <= 0:
+                raise OCREngineError(f"image {path} reports a {width}x{height} page")
 
-        regions: list[TextRegion] = []
-        for result in self.engine.predict(str(path)):
-            regions.extend(_regions(result, width, height, page))
-        return regions
+            regions: list[TextRegion] = []
+            for result in self.engine.predict(str(engine_path)):
+                regions.extend(_regions(result, width, height, page))
+            return regions
+        finally:
+            if raster_path is not None:
+                raster_path.unlink(missing_ok=True)

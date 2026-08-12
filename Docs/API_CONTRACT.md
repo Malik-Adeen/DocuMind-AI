@@ -72,6 +72,12 @@ Content-Type: multipart/form-data
 
 > Frontend: treat this list as closed. If an unknown status arrives, show it verbatim and do not crash.
 
+**A `pdf` upload is rasterized to page 1 only before OCR runs.** Pages beyond the first are not read
+today — a multi-page PDF's extraction reflects page 1 alone, with no signal in the response that
+later pages exist or were skipped. Frontend: if the uploader picks a multi-page PDF, warn them
+before this endpoint sees it, or split it client-side; the API gives you nothing to detect the
+truncation after the fact.
+
 ### `data_classification` is required, not defaulted (new in 0.3.0)
 
 **The choice is deliberate and it is "required".** The server does not fall back to `restricted`

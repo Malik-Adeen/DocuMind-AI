@@ -16,5 +16,15 @@ services:
       timeout: 3s
       retries: 30
 
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   ptcl-pgdata:
