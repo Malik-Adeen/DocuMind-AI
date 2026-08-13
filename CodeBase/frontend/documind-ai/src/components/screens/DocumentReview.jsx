@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { getExtraction, getDocumentFile, correctExtraction, ApiError } from '../../api/client';
+import { getExtraction, getDocumentStatus, getDocumentFile, correctExtraction, ApiError } from '../../api/client';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
@@ -172,9 +172,11 @@ function EditableFieldRow({
         </label>
         {/* INVARIANT 2: Confidence and Verification are separate signals with separate visual badges */}
         <div className="flex items-center gap-1.5">
-          <Badge variant={confVariant} className="text-[10px] py-0 px-1.5 font-label-md">
-            Score: {Math.round(field.confidence * 100)}%
-          </Badge>
+          {field.source?.origin !== 'human' && (
+            <Badge variant={confVariant} className="text-[10px] py-0 px-1.5 font-label-md">
+              Score: {Math.round(field.confidence * 100)}%
+            </Badge>
+          )}
           {field.verified ? (
             <Badge variant="success" className="text-[10px] py-0 px-1.5 font-label-md" title="Confirmed by a deterministic gate or a human correction">
               <ShieldCheck className="w-3 h-3 text-emerald-400" />
@@ -313,6 +315,7 @@ export default function DocumentReview({ documentId, onBack }) {
   const [loading, setLoading] = useState(() => Boolean(documentId));
   const [error, setError] = useState(null);
   const [notReady, setNotReady] = useState(false);
+  const [extractionFailed, setExtractionFailed] = useState(false);
 
   const [fileUrl, setFileUrl] = useState(null);
   const [fileType, setFileType] = useState(null);
@@ -391,28 +394,43 @@ export default function DocumentReview({ documentId, onBack }) {
       setExtraction(null);
       setError(null);
       setNotReady(false);
+      setExtractionFailed(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
     setNotReady(false);
+    setExtractionFailed(false);
     setExtraction(null);
-    getExtraction(documentId)
-      .then((result) => {
+
+    const load = async () => {
+      try {
+        const result = await getExtraction(documentId);
         if (!cancelled) setExtraction(result);
-      })
-      .catch((err) => {
+      } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.code === 'NOT_READY') {
-          setNotReady(true);
+          try {
+            const status = await getDocumentStatus(documentId);
+            if (cancelled) return;
+            if (status.status === 'failed') {
+              setExtractionFailed(true);
+            } else {
+              setNotReady(true);
+            }
+          } catch {
+            if (!cancelled) setNotReady(true);
+          }
         } else {
           setError(err instanceof ApiError ? err.message : 'Failed to load extraction.');
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    load();
+
     return () => {
       cancelled = true;
     };
@@ -622,6 +640,15 @@ export default function DocumentReview({ documentId, onBack }) {
                 <Loader2 className="w-6 h-6 animate-spin text-primary" />
                 <span>Loading extraction data…</span>
               </div>
+            )}
+
+            {documentId && !loading && extractionFailed && (
+              <Alert variant="destructive">
+                <AlertCircle className="w-4 h-4" />
+                <AlertDescription>
+                  Extraction failed. This document will not be processed further, and no failure detail is available.
+                </AlertDescription>
+              </Alert>
             )}
 
             {documentId && !loading && notReady && (

@@ -120,7 +120,7 @@ export default function Login({ onLogin, onBackToHome }) {
                   <Input
                     id="email"
                     type="email"
-                    placeholder="sarah.jenkins@company.com"
+                    placeholder="name@ptcl.internal"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-9 h-10"

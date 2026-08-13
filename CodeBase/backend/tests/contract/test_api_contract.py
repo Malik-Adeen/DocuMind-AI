@@ -285,12 +285,31 @@ def test_get_export_returns_download_url(client: TestClient, reviewer: dict[str,
     assert body["download_url"] == f"/api/v1/exports/{export_id}/file"
 
 
+def _wait_for_export_complete(
+    client: TestClient, headers: dict[str, str], export_id: str, timeout: float = 5.0
+) -> str:
+    """Poll until the export leaves 'queued', or fail loudly rather than hang or race it."""
+    deadline = time.monotonic() + timeout
+    status = "queued"
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/v1/exports/{export_id}", headers=headers).json()["status"]
+        if status in ("complete", "failed"):
+            return status
+        time.sleep(0.05)
+    pytest.fail(
+        f"export {export_id} did not leave 'queued' within {timeout}s (last seen: {status})"
+    )
+
+
 def test_download_export_returns_binary(client: TestClient, reviewer: dict[str, str]) -> None:
     export_id = client.post(
         "/api/v1/exports",
         json={"document_ids": [mock_server.DOC_FAILED_GATE], "format": "xlsx"},
         headers=reviewer,
     ).json()["export_id"]
+
+    status = _wait_for_export_complete(client, reviewer, export_id)
+    assert status == "complete"
 
     response = client.get(f"/api/v1/exports/{export_id}/file", headers=reviewer)
     assert response.status_code == 200

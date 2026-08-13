@@ -28,6 +28,74 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-13 — demo-rehearsal punch list: five fixes plus a mock-fidelity gap in the export contract test, `fix/demo-rehearsal-issues`
+
+**Touched:** no INV directly (see Learned/broke for what each protects) · `dev.sh` (Celery pool),
+`CodeBase/frontend/documind-ai/src/components/screens/DocumentReview.jsx` (confidence-badge
+suppression on human correction; failed-vs-still-processing distinction), `CodeBase/backend/app/core/errors.py`
+(+`DOCUMENTS_NOT_EXPORTABLE`), `CodeBase/backend/app/services/exports.py` (`create_export` now
+validates before enqueueing), `CodeBase/backend/tests/integration/test_exports.py` (new),
+`Docs/API_CONTRACT.md` (0.3.3 → 0.3.4, §6, §8), `CodeBase/frontend/documind-ai/src/components/screens/Login.jsx`
+(placeholder domain), `CodeBase/backend/tests/contract/test_api_contract.py`
+(`test_download_export_returns_binary` now polls to terminal status)
+
+**Did:** Five issues surfaced by a demo rehearsal, fixed in order with review between each, branch
+off `master`, nothing committed yet:
+
+1. `dev.sh` started Celery with the default `prefork` pool — three documents processed in parallel
+   during the rehearsal, contradicting ARCHITECTURE §1's "serialised GPU stage." Added `--pool solo`.
+   Distinct from §3's "concurrency is a config value" (that's a production worker-*count*, tuned by
+   a load test that doesn't exist yet); `--pool solo` just forces one task at a time in the dev
+   worker.
+2. A human-corrected field rendered `Score: 0% · Verified · Human` simultaneously. Root cause:
+   `db/queries.py`'s correction-merge CTE overlays `value`/`verified`/`source`/`gate` but leaves the
+   original model `confidence` untouched. Fixed in the UI, not the backend —
+   `EXTRACTION_SCHEMA.json` requires `confidence` as a non-nullable `[0,1]` number, so there is no
+   valid reset value that wouldn't fabricate a model score that was never computed. `EditableFieldRow`
+   now hides the Score badge when `source.origin === "human"`. Checked `app/export/xlsx.py`
+   separately — it never reads or styles on `confidence` (only `value` and `verified`/`gate_error`),
+   so the same contradiction cannot reach the xlsx output; no export-side change needed.
+3. Export silently dropped documents with no extraction row (`document.status == "failed"` never
+   gets a persisted `Extraction` — `run_and_persist` raises before the insert, and
+   `workers/tasks.py`'s except-block only sets `document.status`). `write_workbook` skipped them with
+   `if view is None: continue`, no warning anywhere. Chose to refuse the whole export over
+   include-and-flag: `create_export` now checks every `document_id` for a `current_extraction` before
+   creating the `Export` row, and raises `DOCUMENTS_NOT_EXPORTABLE` (422, not retryable) naming each
+   excluded document by filename + status if any are missing. New error code registered in the closed
+   `CODES` table, documented in `API_CONTRACT.md` §6/§8, version bumped to 0.3.4 and added to the
+   existing "not agreed with frontend dev" banner — **not shipped to the frontend dev yet, per
+   AGENT_RULES §2's extra gate on endpoint/error-code changes.** `ExportCenter.jsx` needed no change;
+   it already renders `ApiError.message` in an `Alert`.
+4. A failed document showed "still processing" in `DocumentReview.jsx`. Traced one layer past the
+   component: `extraction_payload()` (`app/services/documents.py`) raises `NOT_READY` both for a
+   genuinely in-progress document and for a terminal `failed` document with no extraction row —
+   the frontend can't tell these apart from the extraction call alone. Fixed by having
+   `DocumentReview.jsx` fall back to `GET /status` (which returns `document.status` verbatim) only
+   when it catches `NOT_READY`, and rendering a distinct "extraction failed, no detail available"
+   alert when that status is `failed` — consistent with `/status.error` always being `null`
+   (recorded gap, PROJECT_CONTEXT §7): no cause to show, so the copy doesn't imply one exists or
+   that waiting helps.
+5. Login placeholder (`sarah.jenkins@company.com`) didn't match the seeded `@ptcl.internal` domain.
+   Changed to a generic `name@ptcl.internal` — not one of the three real seeded addresses.
+
+**Learned / broke:** `tests/contract/test_api_contract.py::test_download_export_returns_binary[real]`
+was failing on `master` independent of the five fixes above (`git stash` + rerun confirmed). Diagnosed
+before touching it: `create_export` genuinely runs export generation on a background thread
+(`_run_export_soon` sleeps 0.05 s, then the eager Celery task writes the xlsx), and the test
+downloaded the file immediately after `POST /exports` with no wait — `GET .../file` correctly
+returned `409 NOT_READY` because the artifact wasn't there yet. **The real finding isn't the
+assertion, it's why only `[real]` caught it: `tests/mock_server.py` generates exports synchronously
+— `EXPORTS[export_id] = {...}` and done, no thread, no delay — so the mock target passed a case the
+real target could not.** The contract suite runs every test against both servers specifically so a
+mock/real gap can't hide; this one only stayed hidden because the test itself assumed synchronous
+completion, which happened to be true of the mock's fake and false of the real pipeline it exists to
+model. Fixed the test, not the endpoint: added `_wait_for_export_complete()`, a bounded (5 s) poll of
+`GET /exports/{id}` that fails loudly via `pytest.fail` on timeout rather than hanging or racing the
+409. The endpoint's `409 NOT_READY` while queued is unchanged and correct.
+
+**Next:** Tell the frontend dev about 0.2.0, 0.3.0, and 0.3.4 (API_CONTRACT banner) — nothing in this
+list should ship until that happens. Branch `fix/demo-rehearsal-issues` has all six fixes.
+
 ## 2026-08-13 — INV-2 provenance was dead code since ADR-002; fixed with a soft-fail merge stage (ADR-012)
 
 **Touched:** INV-2 · `CodeBase/backend/app/pipeline/provenance.py` (new), `orchestrator.py`
