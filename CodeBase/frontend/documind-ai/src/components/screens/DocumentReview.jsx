@@ -95,14 +95,15 @@ function FieldRow({ label, field, fieldKey, isHighlighted, onToggleHighlight }) 
     <div
       className={cn(
         'group space-y-1.5 p-3 rounded-lg border transition-colors',
-        hasBBox && 'cursor-pointer',
         isHighlighted
           ? 'bg-primary/10 border-primary/50 ring-1 ring-primary/40'
           : 'bg-muted/20 border-border/30 hover:border-border/60'
       )}
-      {...highlightableRowProps(hasBBox, fieldKey, onToggleHighlight)}
     >
-      <div className="flex flex-wrap justify-between items-center gap-2">
+      <div
+        className={cn('flex flex-wrap justify-between items-center gap-2', hasBBox && 'cursor-pointer')}
+        {...highlightableRowProps(hasBBox, fieldKey, onToggleHighlight)}
+      >
         <label className="font-body-sm text-xs font-medium text-muted-foreground flex items-center gap-1">
           {label}
           {hasBBox && <MapPin className="w-3 h-3 text-primary/70" />}
@@ -156,14 +157,15 @@ function EditableFieldRow({
     <div
       className={cn(
         'group space-y-1.5 p-3 rounded-lg border transition-colors',
-        hasBBox && 'cursor-pointer',
         isHighlighted
           ? 'bg-primary/10 border-primary/50 ring-1 ring-primary/40'
           : 'bg-muted/20 border-border/30 hover:border-border/60'
       )}
-      {...highlightableRowProps(hasBBox, fieldKey, onToggleHighlight)}
     >
-      <div className="flex flex-wrap justify-between items-center gap-2">
+      <div
+        className={cn('flex flex-wrap justify-between items-center gap-2', hasBBox && 'cursor-pointer')}
+        {...highlightableRowProps(hasBBox, fieldKey, onToggleHighlight)}
+      >
         <label className="font-body-sm text-xs font-medium text-muted-foreground flex items-center gap-1" htmlFor={`field-${fieldKey}`}>
           {label}
           {hasBBox && <MapPin className="w-3 h-3 text-primary/70" />}
@@ -196,7 +198,6 @@ function EditableFieldRow({
         id={`field-${fieldKey}`}
         value={value}
         onChange={(e) => onChange(fieldKey, e.target.value)}
-        onClick={(e) => e.stopPropagation()}
         placeholder={isMoney ? '0.00' : 'absent'}
         className={`text-xs h-9 font-body-sm ${validationError ? 'border-destructive focus-visible:ring-destructive' : ''}`}
       />
