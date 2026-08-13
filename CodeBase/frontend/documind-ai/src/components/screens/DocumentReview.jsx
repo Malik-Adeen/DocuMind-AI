@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { getExtraction, getDocumentFile, correctExtraction, ApiError } from '../../api/client';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -19,6 +19,7 @@ import {
   SearchX,
   Download,
   Save,
+  MapPin,
 } from 'lucide-react';
 
 const EXTENSION_BY_TYPE = {
@@ -64,13 +65,48 @@ const MONEY_FIELDS = new Set(['mrc', 'otc', 'subtotal', 'tax', 'total']);
 const MONEY_PATTERN = /^-?[0-9]+\.[0-9]{2}$/;
 const EMPTY_FIELD = { value: null, confidence: 0, verified: false, gate: null, gate_error: null, source: null };
 
-function FieldRow({ label, field }) {
+function fieldBBox(field) {
+  const bbox = field?.source?.bbox;
+  if (!Array.isArray(bbox) || bbox.length !== 4) return null;
+  if (!bbox.every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+  return bbox;
+}
+
+function highlightableRowProps(hasBBox, fieldKey, onToggleHighlight) {
+  if (!hasBBox) return {};
+  return {
+    onClick: () => onToggleHighlight(fieldKey),
+    role: 'button',
+    tabIndex: 0,
+    onKeyDown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onToggleHighlight(fieldKey);
+      }
+    },
+  };
+}
+
+function FieldRow({ label, field, fieldKey, isHighlighted, onToggleHighlight }) {
   if (!field) return null;
   const confVariant = confidenceBadgeVariant(field.confidence);
+  const hasBBox = Boolean(fieldBBox(field));
   return (
-    <div className="group space-y-1.5 p-3 rounded-lg bg-muted/20 border border-border/30 hover:border-border/60 transition-colors">
+    <div
+      className={cn(
+        'group space-y-1.5 p-3 rounded-lg border transition-colors',
+        hasBBox && 'cursor-pointer',
+        isHighlighted
+          ? 'bg-primary/10 border-primary/50 ring-1 ring-primary/40'
+          : 'bg-muted/20 border-border/30 hover:border-border/60'
+      )}
+      {...highlightableRowProps(hasBBox, fieldKey, onToggleHighlight)}
+    >
       <div className="flex flex-wrap justify-between items-center gap-2">
-        <label className="font-body-sm text-xs font-medium text-muted-foreground">{label}</label>
+        <label className="font-body-sm text-xs font-medium text-muted-foreground flex items-center gap-1">
+          {label}
+          {hasBBox && <MapPin className="w-3 h-3 text-primary/70" />}
+        </label>
         {/* INVARIANT 2: Confidence and Verification are separate signals with separate visual badges */}
         <div className="flex items-center gap-1.5">
           <Badge variant={confVariant} className="text-[10px] py-0 px-1.5 font-label-md">
@@ -103,13 +139,35 @@ function FieldRow({ label, field }) {
   );
 }
 
-function EditableFieldRow({ fieldKey, label, field, value, onChange, validationError }) {
+function EditableFieldRow({
+  fieldKey,
+  label,
+  field,
+  value,
+  onChange,
+  validationError,
+  isHighlighted,
+  onToggleHighlight,
+}) {
   const confVariant = confidenceBadgeVariant(field.confidence);
   const isMoney = MONEY_FIELDS.has(fieldKey);
+  const hasBBox = Boolean(fieldBBox(field));
   return (
-    <div className="group space-y-1.5 p-3 rounded-lg bg-muted/20 border border-border/30 hover:border-border/60 transition-colors">
+    <div
+      className={cn(
+        'group space-y-1.5 p-3 rounded-lg border transition-colors',
+        hasBBox && 'cursor-pointer',
+        isHighlighted
+          ? 'bg-primary/10 border-primary/50 ring-1 ring-primary/40'
+          : 'bg-muted/20 border-border/30 hover:border-border/60'
+      )}
+      {...highlightableRowProps(hasBBox, fieldKey, onToggleHighlight)}
+    >
       <div className="flex flex-wrap justify-between items-center gap-2">
-        <label className="font-body-sm text-xs font-medium text-muted-foreground" htmlFor={`field-${fieldKey}`}>{label}</label>
+        <label className="font-body-sm text-xs font-medium text-muted-foreground flex items-center gap-1" htmlFor={`field-${fieldKey}`}>
+          {label}
+          {hasBBox && <MapPin className="w-3 h-3 text-primary/70" />}
+        </label>
         {/* INVARIANT 2: Confidence and Verification are separate signals with separate visual badges */}
         <div className="flex items-center gap-1.5">
           <Badge variant={confVariant} className="text-[10px] py-0 px-1.5 font-label-md">
@@ -138,6 +196,7 @@ function EditableFieldRow({ fieldKey, label, field, value, onChange, validationE
         id={`field-${fieldKey}`}
         value={value}
         onChange={(e) => onChange(fieldKey, e.target.value)}
+        onClick={(e) => e.stopPropagation()}
         placeholder={isMoney ? '0.00' : 'absent'}
         className={`text-xs h-9 font-body-sm ${validationError ? 'border-destructive focus-visible:ring-destructive' : ''}`}
       />
@@ -221,22 +280,28 @@ function GatesSection({ gates }) {
   );
 }
 
-function LineItemsSection({ lineItems }) {
+function LineItemsSection({ lineItems, highlightedField, onToggleHighlight }) {
   if (!lineItems || lineItems.length === 0) return null;
   return (
     <div className="space-y-3 pt-2">
       <h4 className="font-label-md text-xs text-muted-foreground uppercase tracking-wider font-semibold">Line Items</h4>
       <div className="space-y-3">
-        {lineItems.map((item, i) => (
-          <div key={i} className="p-3 rounded-lg border border-border/40 bg-muted/20 space-y-3">
-            <FieldRow label="Description" field={item.description} />
-            <div className="grid grid-cols-1 gap-2.5">
-              <FieldRow label="Qty" field={item.quantity} />
-              <FieldRow label="Unit Price" field={item.unit_price} />
-              <FieldRow label="Line Total" field={item.line_total} />
+        {lineItems.map((item, i) => {
+          const subFieldProps = (subKey) => {
+            const key = `line_items[${i}].${subKey}`;
+            return { fieldKey: key, isHighlighted: highlightedField === key, onToggleHighlight };
+          };
+          return (
+            <div key={i} className="p-3 rounded-lg border border-border/40 bg-muted/20 space-y-3">
+              <FieldRow label="Description" field={item.description} {...subFieldProps('description')} />
+              <div className="grid grid-cols-1 gap-2.5">
+                <FieldRow label="Qty" field={item.quantity} {...subFieldProps('quantity')} />
+                <FieldRow label="Unit Price" field={item.unit_price} {...subFieldProps('unit_price')} />
+                <FieldRow label="Line Total" field={item.line_total} {...subFieldProps('line_total')} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -257,6 +322,30 @@ export default function DocumentReview({ documentId, onBack }) {
   const [validationErrors, setValidationErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+
+  const [highlightedField, setHighlightedField] = useState(null);
+  const [imageBox, setImageBox] = useState(null);
+  const previewContainerRef = useRef(null);
+  const imgRef = useRef(null);
+
+  const recomputeImageBox = useCallback(() => {
+    const img = imgRef.current;
+    const container = previewContainerRef.current;
+    if (!img || !container) return;
+    const imgRect = img.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (imgRect.width === 0 || imgRect.height === 0) return;
+    setImageBox({
+      left: imgRect.left - containerRect.left,
+      top: imgRect.top - containerRect.top,
+      width: imgRect.width,
+      height: imgRect.height,
+    });
+  }, []);
+
+  const handleToggleHighlight = useCallback((key) => {
+    setHighlightedField((prev) => (prev === key ? null : key));
+  }, []);
 
   useEffect(() => {
     if (!documentId) {
@@ -296,6 +385,7 @@ export default function DocumentReview({ documentId, onBack }) {
     setEditedValues({});
     setValidationErrors({});
     setSaveError(null);
+    setHighlightedField(null);
     if (!documentId) {
       setExtraction(null);
       setError(null);
@@ -393,6 +483,27 @@ export default function DocumentReview({ documentId, onBack }) {
             ? 'download'
             : 'empty';
 
+  useEffect(() => {
+    if (previewPhase !== 'image') {
+      setImageBox(null);
+      return;
+    }
+    const container = previewContainerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(recomputeImageBox);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [previewPhase, recomputeImageBox]);
+
+  const highlightedBBox = useMemo(() => {
+    if (!highlightedField || !extraction) return null;
+    const lineItemMatch = /^line_items\[(\d+)\]\.(.+)$/.exec(highlightedField);
+    const field = lineItemMatch
+      ? extraction.line_items?.[Number(lineItemMatch[1])]?.[lineItemMatch[2]]
+      : extraction.fields?.[highlightedField];
+    return fieldBBox(field);
+  }, [highlightedField, extraction]);
+
   return (
     <div className="flex-1 flex overflow-hidden w-full h-full animate-fadeIn">
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden w-full">
@@ -406,7 +517,10 @@ export default function DocumentReview({ documentId, onBack }) {
               Exit Workspace
             </Button>
           </div>
-          <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20 overflow-hidden">
+          <div
+            ref={previewContainerRef}
+            className="flex-1 flex flex-col items-center justify-center text-muted-foreground text-xs text-center p-8 bg-card/20 overflow-hidden relative"
+          >
             {(() => {
               switch (previewPhase) {
                 case 'loading':
@@ -428,11 +542,26 @@ export default function DocumentReview({ documentId, onBack }) {
 
                 case 'image':
                   return (
-                    <img
-                      src={fileUrl}
-                      alt="Document preview"
-                      className="max-w-full max-h-full object-contain rounded-md shadow-lg"
-                    />
+                    <>
+                      <img
+                        ref={imgRef}
+                        src={fileUrl}
+                        alt="Document preview"
+                        className="max-w-full max-h-full object-contain rounded-md shadow-lg"
+                        onLoad={recomputeImageBox}
+                      />
+                      {imageBox && highlightedBBox && (
+                        <div
+                          className="absolute pointer-events-none border-2 border-primary bg-primary/20 rounded-sm"
+                          style={{
+                            left: imageBox.left + highlightedBBox[0] * imageBox.width,
+                            top: imageBox.top + highlightedBBox[1] * imageBox.height,
+                            width: (highlightedBBox[2] - highlightedBBox[0]) * imageBox.width,
+                            height: (highlightedBBox[3] - highlightedBBox[1]) * imageBox.height,
+                          }}
+                        />
+                      )}
+                    </>
                   );
 
                 case 'download':
@@ -560,6 +689,8 @@ export default function DocumentReview({ documentId, onBack }) {
                         value={value}
                         onChange={handleFieldChange}
                         validationError={validationErrors[key]}
+                        isHighlighted={highlightedField === key}
+                        onToggleHighlight={handleToggleHighlight}
                       />
                     );
                   })}
@@ -586,7 +717,11 @@ export default function DocumentReview({ documentId, onBack }) {
 
                 <div className="h-px w-full bg-border/40"></div>
 
-                <LineItemsSection lineItems={extraction.line_items} />
+                <LineItemsSection
+                  lineItems={extraction.line_items}
+                  highlightedField={highlightedField}
+                  onToggleHighlight={handleToggleHighlight}
+                />
 
                 <div className="h-px w-full bg-border/40"></div>
 

@@ -79,7 +79,7 @@ export default function App() {
   const pendingQueueCount = queueItems.filter((item) => !TERMINAL_STATUSES.includes(item.status)).length;
 
   return (
-    <div className="bg-background text-foreground font-sans antialiased min-h-screen flex w-full">
+    <div className="bg-background text-foreground font-sans antialiased h-screen flex w-full overflow-hidden">
       {/* Desktop Navigation */}
       <Sidebar
         activeTab={activeScreen}
@@ -92,7 +92,7 @@ export default function App() {
       />
 
       {/* Main Content Pane */}
-      <div className="flex-1 md:ml-64 flex flex-col min-h-screen relative overflow-hidden">
+      <div className="flex-1 md:ml-64 flex flex-col h-full relative overflow-hidden">
         
         {/* Top Header Bar */}
         <header className="flex justify-between items-center px-6 sticky top-0 z-40 w-full h-14 bg-card/70 backdrop-blur-xl border-b border-border/40 shrink-0">
@@ -205,7 +205,7 @@ export default function App() {
         )}
 
         {/* Active Screen Render Container */}
-        <div className="flex-1 overflow-y-auto w-full flex flex-col">
+        <div className="flex-1 min-h-0 overflow-y-auto w-full flex flex-col">
           {activeScreen === 'Dashboard' && (
             <Dashboard
               onViewChange={(tab) => setActiveScreen(tab)}
