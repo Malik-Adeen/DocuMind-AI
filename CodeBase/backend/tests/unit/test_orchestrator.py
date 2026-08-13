@@ -388,3 +388,72 @@ def test_schema_valid_but_rejected_output_twice_exhausts_repair_and_raises() -> 
         extract(document(), ocr=FakeOCR(regions()), llm=llm)
 
     assert len(spy.calls) == 2
+
+
+def test_field_with_matching_raw_text_gets_bbox_and_page_attached() -> None:
+    fields = {
+        "po_number": llm_field(
+            "PO-2291", source={"origin": "llm_inferred", "raw_text": "PO Number: PO-2291"}
+        )
+    }
+    llm, _spy = hosted_llm(llm_body(fields))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    source = outcome.result["fields"]["po_number"]["source"]
+    assert source["page"] == 1
+    assert source["bbox"] == [0.1, 0.1, 0.5, 0.2]
+
+
+def test_field_with_unmatched_raw_text_does_not_raise_and_routes_needs_review() -> None:
+    fields = {
+        "iban": llm_field(
+            IBAN_VALID,
+            source={"origin": "llm_inferred", "raw_text": "text not present in OCR output"},
+        )
+    }
+    llm, _spy = hosted_llm(llm_body(fields))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    source = outcome.result["fields"]["iban"]["source"]
+    assert "bbox" not in source
+    assert "page" not in source
+    assert outcome.status == "needs_review"
+
+
+def test_field_without_raw_text_has_no_bbox_and_can_still_complete() -> None:
+    fields = {"iban": llm_field(IBAN_VALID)}
+    llm, _spy = hosted_llm(llm_body(fields))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    source = outcome.result["fields"]["iban"]["source"]
+    assert "bbox" not in source
+    assert outcome.status == "complete"
+
+
+def test_line_item_field_provenance_is_attached() -> None:
+    fields = {
+        "iban": llm_field(IBAN_VALID),
+        "subtotal": llm_field("10000.00"),
+        "tax": llm_field("1700.00"),
+        "total": llm_field("11700.00"),
+    }
+    line_items = [
+        {
+            "description": llm_field(
+                "Managed router",
+                source={"origin": "llm_inferred", "raw_text": "Total: 11700.00"},
+            ),
+            "quantity": llm_field("1"),
+            "unit_price": llm_field("10000.00"),
+            "line_total": llm_field("10000.00"),
+        }
+    ]
+    llm, _spy = hosted_llm(llm_body(fields, line_items=line_items))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    source = outcome.result["line_items"][0]["description"]["source"]
+    assert source["bbox"] == [0.1, 0.1, 0.5, 0.2]
