@@ -10,11 +10,28 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import ApiError
-from app.db.models import Export
+from app.db.models import Document, Export
+from app.db.queries import current_extraction
 from app.services.documents import record_audit
 from app.workers.tasks import generate_export
 
 FORMATS = frozenset({"xlsx"})
+
+
+def _not_exportable(db: Session, document_ids: list[str]) -> list[str]:
+    """Document ids with no extraction to export — a name for the message, not a guess."""
+    excluded = []
+    for raw_id in document_ids:
+        try:
+            parsed = uuid.UUID(raw_id)
+        except ValueError:
+            excluded.append(raw_id)
+            continue
+        if current_extraction(db, parsed) is not None:
+            continue
+        document = db.get(Document, parsed)
+        excluded.append(f"{document.filename} ({document.status})" if document else raw_id)
+    return excluded
 
 
 def create_export(
@@ -27,6 +44,14 @@ def create_export(
 ) -> Export:
     if export_format not in FORMATS:
         raise ApiError("UNSUPPORTED_TYPE", f"Unsupported export format {export_format}.")
+
+    excluded = _not_exportable(db, document_ids)
+    if excluded:
+        raise ApiError(
+            "DOCUMENTS_NOT_EXPORTABLE",
+            "No extraction to export for: " + ", ".join(excluded) + ". "
+            "Deselect these documents and export the rest separately.",
+        )
 
     export = Export(
         id=uuid.uuid4(),

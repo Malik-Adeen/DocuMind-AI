@@ -19,6 +19,7 @@ CODES: dict[str, tuple[int, bool]] = {
     "IMMUTABLE_FIELD": (422, False),
     "OCR_FAILED": (422, True),
     "EXTRACTION_FAILED": (422, True),
+    "DOCUMENTS_NOT_EXPORTABLE": (422, False),
     "RATE_LIMITED": (429, True),
     "INTERNAL": (500, True),
 }

@@ -121,7 +121,7 @@ do_start() {
   echo "dev.sh: both services healthy."
 
   echo "dev.sh: starting celery worker..."
-  start_bg celery "$BACKEND_DIR" env CELERY_TASK_ALWAYS_EAGER=false uv run celery -A app.workers worker -l info
+  start_bg celery "$BACKEND_DIR" env CELERY_TASK_ALWAYS_EAGER=false uv run celery -A app.workers worker -l info --pool solo
 
   echo "dev.sh: starting uvicorn..."
   start_bg uvicorn "$BACKEND_DIR" env CELERY_TASK_ALWAYS_EAGER=false uv run uvicorn app.main:app --reload

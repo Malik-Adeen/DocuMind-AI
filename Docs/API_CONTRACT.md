@@ -1,13 +1,13 @@
 ---
 status: draft
 owner: Adeen & Frontend
-last_reviewed: 2026-08-12
-version: 0.3.3
+last_reviewed: 2026-08-13
+version: 0.3.4
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.3 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.3.4 · **Status:** Draft — freeze before frontend work starts
 **Owners:** backend (Adeen) + frontend (friend). Changes require both.
 
 > ✅ **Implemented.** Every endpoint below is now served by the real application
@@ -15,11 +15,12 @@ version: 0.3.3
 > `backend/tests/mock_server.py` is still shipped and still runs — both are exercised by the same
 > contract suite (§10).
 >
-> ⚠️ **Not agreed. The frontend dev has still not been told about 0.2.0 or 0.3.0.** Both are
-> breaking. 0.2.0 removed `gates[].passed`; 0.3.0 adds a **required** `data_classification` on
-> upload and adds `profile` to `pipeline_version`. §4's ground rule 4 says removing or renaming a
-> field needs both owners to agree first — one owner has seen either version so far. This banner
-> comes off when he has read both and agreed, not when the code is written.
+> ⚠️ **Not agreed. The frontend dev has still not been told about 0.2.0, 0.3.0, or 0.3.4.** All are
+> breaking or additive-but-load-bearing. 0.2.0 removed `gates[].passed`; 0.3.0 adds a **required**
+> `data_classification` on upload and adds `profile` to `pipeline_version`; 0.3.4 adds a new export
+> error code, `DOCUMENTS_NOT_EXPORTABLE` (§6). §4's ground rule 4 says removing or renaming a field
+> needs both owners to agree first — one owner has seen any of the three so far. This banner comes
+> off when he has read all three and agreed, not when the code is written.
 
 Base path: `/api/v1`. All bodies JSON unless stated. All timestamps ISO-8601 UTC.
 
@@ -247,6 +248,7 @@ POST /api/v1/exports
 { "document_ids": ["uuid", ...], "format": "xlsx" }   // xlsx only for now — csv | json reserved, not implemented
 → 202 { "export_id": "uuid", "status": "queued" }
 → 415 { "code": "UNSUPPORTED_TYPE", ... } format is not "xlsx"
+→ 422 { "code": "DOCUMENTS_NOT_EXPORTABLE", ... } one or more document_ids have no extraction
 
 GET /api/v1/exports/{id}
 → 200 { "status": "queued" | "complete" | "failed", "download_url": "/api/v1/exports/{id}/file", "expires_at": "..." }
@@ -256,6 +258,19 @@ GET /api/v1/exports/{id}/file
 ```
 
 Column order for `xlsx` is fixed and derived from `EXTRACTION_SCHEMA.json` field order.
+
+### `DOCUMENTS_NOT_EXPORTABLE` (new in 0.3.4)
+
+A document with no extraction row — most commonly `status: "failed"`, but also `queued` /
+`extracting` / `ocr` / `validating` if the caller races the pipeline — has nothing for the xlsx
+writer to put in a row. Previously `write_workbook` silently skipped it: a 3-document export with
+one failed document came back as a 2-row file with no warning anywhere. **The whole export is now
+refused, not partially produced.** The error message names every excluded document by filename and
+status, e.g. `"No extraction to export for: invoice-9931.pdf (failed). Deselect these documents and
+export the rest separately."` No `Export` row is created and nothing is enqueued — the check runs
+before either. **Frontend: show this message as-is (or parse it if you want per-file chips); do not
+retry automatically** — `retryable` is `false` because resubmitting the same `document_ids` fails
+the same way.
 
 **Only `xlsx` is implemented (0.3.3).** The schema still names `csv` and `json` as future values —
 sending either today gets `415 UNSUPPORTED_TYPE`, same as any other unsupported format.
@@ -318,6 +333,7 @@ on `filename`.
 | `IMMUTABLE_FIELD` | 422 | no |
 | `OCR_FAILED` | 422 | yes |
 | `EXTRACTION_FAILED` | 422 | yes |
+| `DOCUMENTS_NOT_EXPORTABLE` | 422 | no |
 | `RATE_LIMITED` | 429 | yes |
 | `INTERNAL` | 500 | yes |
 
