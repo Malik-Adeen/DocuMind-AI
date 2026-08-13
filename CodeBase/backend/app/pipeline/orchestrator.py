@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -20,7 +21,10 @@ from app.pipeline.llm.client import LLMClient
 from app.pipeline.llm.prompt_builder import build_prompt
 from app.pipeline.llm.repair import RepairExhaustedError, complete_with_repair
 from app.pipeline.ocr.paddle import ENGINE_VERSION, TextRegion
+from app.pipeline.provenance import ProvenanceReport, attach_provenance
 from app.schemas.extraction import extraction_schema, model_output_schema, schema_version
+
+logger = logging.getLogger("app")
 
 OCR_URDU_VERSION = "qaari-0.1-urdu"
 
@@ -142,9 +146,27 @@ def _assert_money_fields_gated(fields: Mapping[str, Any]) -> None:
         )
 
 
-def _needs_review(fields: Mapping[str, Any]) -> bool:
+def _log_provenance(document_id: str, report: ProvenanceReport) -> None:
+    if report.unmatched_claims:
+        logger.warning(
+            "extraction %s: provenance unmatched for field(s) %s",
+            document_id,
+            ", ".join(report.unmatched_claims),
+        )
+    logger.info(
+        "extraction %s: provenance %d/%d claimed fields resolved (%d populated)",
+        document_id,
+        report.resolved_fields,
+        report.claimed_fields,
+        report.populated_fields,
+    )
+
+
+def _needs_review(fields: Mapping[str, Any], unmatched_claims: Sequence[str] = ()) -> bool:
     populated = [entry for entry in fields.values() if entry.get("value") is not None]
     if not populated:
+        return True
+    if unmatched_claims:
         return True
     return not all(entry.get("verified") for entry in populated)
 
@@ -184,8 +206,12 @@ def extract(
 
     fields: dict[str, Any] = dict(parsed.get("fields") or {})
     _reset_verification(fields)
+    line_items: list[dict[str, Any]] = list(parsed.get("line_items") or [])
 
-    extraction_view = {"fields": fields, "line_items": parsed.get("line_items", [])}
+    provenance = attach_provenance(fields, line_items, text_regions)
+    _log_provenance(document.document_id, provenance)
+
+    extraction_view = {"fields": fields, "line_items": line_items}
     gate_results: list[GateResult] = []
     for gate in gates:
         gate_results.extend(gate(extraction_view))
@@ -193,7 +219,7 @@ def extract(
     _apply_gates(fields, gate_results)
     _assert_money_fields_gated(fields)
 
-    status = "needs_review" if _needs_review(fields) else "complete"
+    status = "needs_review" if _needs_review(fields, provenance.unmatched_claims) else "complete"
 
     result: dict[str, Any] = {
         "document_id": document.document_id,
@@ -215,7 +241,7 @@ def extract(
     if "language" in parsed:
         result["language"] = parsed["language"]
     if "line_items" in parsed:
-        result["line_items"] = parsed["line_items"]
+        result["line_items"] = line_items
 
     return ExtractionOutcome(result=result, status=status, gates=tuple(gate_results))
 

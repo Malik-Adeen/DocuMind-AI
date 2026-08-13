@@ -28,6 +28,39 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-13 — INV-2 provenance was dead code since ADR-002; fixed with a soft-fail merge stage (ADR-012)
+
+**Touched:** INV-2 · `CodeBase/backend/app/pipeline/provenance.py` (new), `orchestrator.py`
+(`attach_provenance` wired in, `_needs_review` now also triggered by an unmatched claim, `_log_provenance`),
+`tests/unit/test_provenance.py` (new), `tests/unit/test_orchestrator.py` (+4 tests),
+`Docs/decisions/ADR-012-provenance-merge-was-dead-code.md` (new), `Docs/ARCHITECTURE.md` §2 (Stage 5b
++ routing), `Docs/PROJECT_CONTEXT.md` §8
+
+**Did:** A request to spec bbox-highlighting in `DocumentReview.jsx` turned up that no real
+extraction has ever carried `source.page`/`source.bbox` — `TextRegion.as_source()` existed and was
+unit-tested but was never called; `build_prompt()` discards regions down to plain text before the
+LLM ever sees them. Confirmed via `backend/evals/history/*.jsonl` (zero `bbox`/`page` occurrences
+across 5 real hosted-LLM run logs) and via a fresh 15-rep real run against the hosted LLM (`evals/repro.py`,
+unmodified) across all 3 synthetic invoice fixtures with the new merge applied: 277/283 (97.9%)
+claimed quotes resolved to a real bbox. Wrote `attach_provenance()` (exact substring match of a
+field's `raw_text` against the reconstructed OCR text, offset-tracked per region) and wired it into
+`extract()` right after gates. First design used a hard `raise` on an unmatched claim, mirroring
+INV-1's `_assert_money_fields_gated` — reverted before landing per explicit direction: the match is
+itself a fallible check and must not be authoritative over the document, same logic as a
+`format_only` gate (ADR-004). An unmatched claim is now logged and added as one more path into
+`_needs_review()`, never a hard failure.
+
+**Learned / broke:** The one invoice with real misses (`invoice_3_dense_layout`, 103/109) showed the
+failure mode is not a whitespace/case mismatch normalization would fix — the model stitched a
+non-adjacent column header (`"Qty"`) and a data-row value (`"1"`) into one fabricated-looking quote
+that never appears contiguously in the source OCR text. The exact-substring check correctly refused
+it. Deferred fuzzy/normalized matching rather than building it speculatively — this run gave no
+evidence it would help.
+
+**Next:** `DocumentReview.jsx` bbox-highlight UI is now buildable against real data — not started.
+`backend/evals/run_eval.py` still doesn't exist; a golden-set-level coverage regression threshold
+(ADR-012's "Revisit when") needs it first.
+
 ## 2026-08-12 — frontend wired end-to-end against the real API; `_needs_review`'s vacuous `all()` fixed (ADR-011); full real path reverified clean to `needs_review`
 
 **Touched:** no INV directly (see Learned/broke for what ADR-011 protects) ·

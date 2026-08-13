@@ -104,6 +104,9 @@ Redis ──► Celery worker ────┘
               │             prototype:  hosted API — INV-6 guard refuses
               │                         anything not public/synthetic
               ├─ Stage 5  schema validation       → reject malformed, no partial accept
+              ├─ Stage 5b provenance merge        → match claimed raw_text back to an OCR
+              │             region's bbox/page (INV-2); no match = left unattached, never
+              │             fabricated (app/pipeline/provenance.py, [[ADR-012-provenance-merge-was-dead-code]])
               ├─ Stage 6  deterministic gates     → IBAN / CNIC / arithmetic
               └─ Stage 7  persist + route         → complete | needs_review
                             │
@@ -147,6 +150,19 @@ claimed; only a gate result of `passed` can set it back to `true` (INV-5) — a 
 reports 0.99 confidence on is not verified if no gate touched it, and stays unverified if a gate
 touching it failed.
 
+**Stage 5b is `app/pipeline/provenance.py`, wired into `orchestrator.py` right after the `fields`
+dict is built.** For every field whose `source.origin` is `llm_inferred` and `source.raw_text` is
+present, it does an exact substring search for that quote against the same joined OCR text
+`build_prompt` sent the LLM, and on a match attaches the matched region's `page`/`bbox`. No match
+leaves `source` exactly as the LLM produced it — never a fabricated box. This was previously dead
+code: `TextRegion.as_source()` existed and was unit-tested in isolation but nothing called it, so
+every real extraction shipped with no `page`/`bbox` on any field until
+[[ADR-012-provenance-merge-was-dead-code]] fixed it. A field whose claimed quote doesn't match
+anything is not a pipeline failure — it is logged and forces `needs_review`, the same weight as a
+failed or `format_only` gate ([[ADR-004-format-only-gate-state]]): an exact-substring check against
+reconstructed OCR text is itself fallible, so it can flag a document for review but cannot condemn
+the whole extraction.
+
 **The gate registry (`DEFAULT_GATES`) is an explicit tuple, not import-scanning.** A gate module
 that exists under `pipeline/gates/` but is not added to that tuple never runs — a silent hole, by
 design made visible rather than automatic. Before persisting, every top-level money field (derived
@@ -154,10 +170,10 @@ from `EXTRACTION_SCHEMA.json`'s `money_field` refs, not hand-listed — currentl
 `subtotal`, `tax`, `total`) must carry a non-null `gate`; if none of the registered gates touched
 it, `run_and_persist` refuses to write the row rather than persist an unchecked number (INV-1).
 
-**Routing:** `complete` only if every populated top-level field ends up `verified: true`;
-otherwise `needs_review`. In practice this routes most realistic documents to review, since fields
-like `customer_name` have no gate at all yet — that is the intended bias ([[PROJECT_CONTEXT]] §2),
-not a bug to tighten.
+**Routing:** `complete` only if every populated top-level field ends up `verified: true` **and no
+field's claimed source quote went unmatched in Stage 5b**; otherwise `needs_review`. In practice
+this routes most realistic documents to review, since fields like `customer_name` have no gate at
+all yet — that is the intended bias ([[PROJECT_CONTEXT]] §2), not a bug to tighten.
 
 Local filesystem for raw uploads and exports. Not MinIO, not S3 — a directory with a documented
 path and a backup cron. Swap later if it ever needs to be shared across nodes.
