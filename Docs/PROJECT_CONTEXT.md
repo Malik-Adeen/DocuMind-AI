@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-08
-version: 1.1.1
+last_reviewed: 2026-08-17
+version: 1.1.3
 ---
 
 # PROJECT_CONTEXT.md — Second Brain
@@ -72,12 +72,16 @@ on any profile ([[ADR-006-two-deployment-profiles]], INV-6). [[ADR-001-local-llm
 
 ## 4. Team split
 
-- **Adeen — backend.** OCR pipeline, LLM extraction, validation gates, API, DB, Excel export.
-- **Friend — frontend.** Upload UI, processing status, review/correction screen, export trigger.
+- **Adeen — both sides.** OCR pipeline, LLM extraction, validation gates, API, DB, Excel export,
+  and the frontend surfaces: upload UI, processing status, review/correction screen, export trigger.
+  Single owner as of [[ADR-013-single-owner-for-the-api-contract]] (2026-08-14) — previously split
+  with a separate frontend developer; see that ADR for what changed and why.
 
-**The contract between them is [`API_CONTRACT.md`](./API_CONTRACT.md).**
-Neither side changes it unilaterally. Change = both agree, bump version, update the file in
-the same commit as the code.
+**The contract between backend and frontend is still [`API_CONTRACT.md`](./API_CONTRACT.md)**, even
+with one owner on both sides of it — it is what keeps the mock server, the real API, and the frontend
+client from drifting apart. Change = update the file and bump its version, in the same commit as the
+code. There is no separate agreement step; see [[ADR-013-single-owner-for-the-api-contract]] for why
+that gate was retired rather than left in place unable to fire.
 
 ### Working rule
 Frontend does **not** wait for backend. Backend ships the API contract + a mock server on day one;
@@ -142,10 +146,16 @@ Keep this list short and honest. Move items to a decision below once resolved.
 
 ### Known gaps — recorded, not fixed
 
-- [ ] **`/status.error` is always `null`.** `status_payload()`
-      (`backend/app/services/documents.py`) hardcodes `"error": None` regardless of the actual
-      failure cause — a refused hosted-LLM call, a PaddleOCR crash, and any other failure all
-      look identical to the caller. Nothing in the API today distinguishes them.
+- [ ] **`/status.error` is `null` for most failure causes, still.** Narrowed 2026-08-14, not
+      resolved: `documents.error` is now populated for two causes — `HostedEndpointRefusedError`
+      (INV-6 refusing a restricted document at extraction) and the unclassified-exception catch-all
+      in `extract_document` — both via `app/core/errors.py`'s `envelope()`, `code`/`message`/
+      `trace_id`/`retryable` only, no document content (ADR-006's constraint on `HostedEndpointRefusedError`'s
+      own message already guaranteed this; the catch-all uses a fixed generic message rather than
+      `str(exc)` for the same reason). A PaddleOCR crash, an LLM schema-validation failure, and a
+      gate-coverage failure (`OCRFailedError` / `ExtractionFailedError` / `GateCoverageError`, all
+      `OrchestratorError` subclasses) still leave `error: null` — only their `stage` reaches the log,
+      not the API. Closing that is unstarted.
 - [ ] **Two of eight gates are unbuildable as designed.** The gate registry names
       `ntn_format_check` and `strn_format_check`, but [[EXTRACTION_SCHEMA.json]]'s `fields` block
       has no `ntn`/`strn` field for either to check against. First found 2026-08-10 ([[JOURNAL]]),
@@ -176,6 +186,8 @@ it with a new one.
 - [[ADR-010-mrc-otc-require-a-verbatim-field-label]] — A populated `mrc`/`otc` value is only valid if the document itself labels that specific field; a numerically plausible value copied from a differently-labeled line is a violation even when its quoted `source.raw_text` is a real, non-fabricated substring. Names the rule; does not decide an enforcement mechanism — retrying the already-reverted schema-description fix needs a live-fail check first.
 - [[ADR-011-terminal-status-requires-positive-verification-evidence]] — `_needs_review`'s `all()` over an empty set of populated fields was vacuously `True`, so an extraction with zero populated fields routed to `complete` with `review.required: false` — indistinguishable from a fully verified document. Fixed to require at least one populated, gate-verified field before `complete` is earned; terminal status must come from positive evidence, not the absence of an unverified field.
 - [[ADR-012-provenance-merge-was-dead-code]] — INV-2 shipped unenforced since ADR-002: `TextRegion.as_source()` was dead code, so every real extraction carried no `source.page`/`source.bbox`. Fixed with a provenance-merge stage that matches a field's claimed `raw_text` back to its OCR region; an unmatched claim is logged and forces `needs_review`, it does not fail the extraction — the match itself is a fallible check and must not be authoritative, same logic as `format_only` (ADR-004). First real-run evidence: 277/283 (97.9%) claimed quotes resolved across 3 synthetic invoices.
+- [[ADR-013-single-owner-for-the-api-contract]] — `API_CONTRACT.md`'s co-ownership gate (§4) is retired: the frontend/backend split ended and Adeen owns both sides. The "not agreed" banner covering 0.2.0/0.3.0 is removed, not backfilled as reviewed — the gate is gone because the role it depended on no longer exists, not because a second reading happened.
+- [[ADR-014-hosted-processing-exception-for-two-named-documents]] — Two real PTCL documents (`Azeem.jpeg`, `Azeem.pdf`) are uploaded as `data_classification: public` for a one-off hosted-profile test, under verbal authorization. Per-document exception only, not a category or a precedent — INV-6's guard, default-deny behaviour, and code are all unchanged.
 
 ## 9. Session protocol (for AI coding assistants)
 

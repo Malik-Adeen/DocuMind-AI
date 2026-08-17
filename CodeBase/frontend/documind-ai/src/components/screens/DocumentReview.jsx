@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   UserCheck,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   SearchX,
   Download,
@@ -72,6 +73,23 @@ function fieldBBox(field) {
   return bbox;
 }
 
+function isUnmatchedClaim(field) {
+  return field?.source?.unmatched === true;
+}
+
+function UnmatchedClaimBadge() {
+  return (
+    <Badge
+      variant="destructive"
+      className="text-[10px] py-0 px-1.5 font-label-md"
+      title="The model claimed this text was quoted from the document, but that quote could not be found anywhere in the OCR output. Distinct from an unconfirmed gate — this is a citation that does not exist in the source, not merely an unverified value."
+    >
+      <AlertTriangle className="w-3 h-3" />
+      Unmatched Quote
+    </Badge>
+  );
+}
+
 function highlightableRowProps(hasBBox, fieldKey, onToggleHighlight) {
   if (!hasBBox) return {};
   return {
@@ -124,6 +142,7 @@ function FieldRow({ label, field, fieldKey, isHighlighted, onToggleHighlight }) 
               Unverified
             </Badge>
           )}
+          {isUnmatchedClaim(field) && <UnmatchedClaimBadge />}
         </div>
       </div>
       <div className="w-full bg-background/80 border border-input rounded-md py-2 px-3 text-xs text-foreground font-body-sm min-h-[36px] flex items-center">
@@ -135,6 +154,11 @@ function FieldRow({ label, field, fieldKey, isHighlighted, onToggleHighlight }) 
       </div>
       {field.gate_error && (
         <p className="text-destructive text-[11px] font-label-md mt-1">{field.gate_error}</p>
+      )}
+      {isUnmatchedClaim(field) && (
+        <p className="text-destructive text-[11px] font-label-md mt-1">
+          Quoted source text was not found in the OCR output for this document — treat the value as unconfirmed.
+        </p>
       )}
     </div>
   );
@@ -194,6 +218,7 @@ function EditableFieldRow({
               Human
             </Badge>
           )}
+          {isUnmatchedClaim(field) && <UnmatchedClaimBadge />}
         </div>
       </div>
       <Input
@@ -207,6 +232,10 @@ function EditableFieldRow({
         <p className="text-destructive text-[11px] font-label-md mt-1">{validationError}</p>
       ) : field.gate_error ? (
         <p className="text-destructive text-[11px] font-label-md mt-1">{field.gate_error}</p>
+      ) : isUnmatchedClaim(field) ? (
+        <p className="text-destructive text-[11px] font-label-md mt-1">
+          Quoted source text was not found in the OCR output for this document — treat the value as unconfirmed.
+        </p>
       ) : null}
     </div>
   );
@@ -316,6 +345,7 @@ export default function DocumentReview({ documentId, onBack }) {
   const [error, setError] = useState(null);
   const [notReady, setNotReady] = useState(false);
   const [extractionFailed, setExtractionFailed] = useState(false);
+  const [failureError, setFailureError] = useState(null);
 
   const [fileUrl, setFileUrl] = useState(null);
   const [fileType, setFileType] = useState(null);
@@ -395,6 +425,7 @@ export default function DocumentReview({ documentId, onBack }) {
       setError(null);
       setNotReady(false);
       setExtractionFailed(false);
+      setFailureError(null);
       return;
     }
     let cancelled = false;
@@ -402,6 +433,7 @@ export default function DocumentReview({ documentId, onBack }) {
     setError(null);
     setNotReady(false);
     setExtractionFailed(false);
+    setFailureError(null);
     setExtraction(null);
 
     const load = async () => {
@@ -416,6 +448,7 @@ export default function DocumentReview({ documentId, onBack }) {
             if (cancelled) return;
             if (status.status === 'failed') {
               setExtractionFailed(true);
+              setFailureError(status.error ?? null);
             } else {
               setNotReady(true);
             }
@@ -646,7 +679,9 @@ export default function DocumentReview({ documentId, onBack }) {
               <Alert variant="destructive">
                 <AlertCircle className="w-4 h-4" />
                 <AlertDescription>
-                  Extraction failed. This document will not be processed further, and no failure detail is available.
+                  {failureError
+                    ? failureError.message
+                    : 'Extraction failed. This document will not be processed further, and no failure detail is available.'}
                 </AlertDescription>
               </Alert>
             )}

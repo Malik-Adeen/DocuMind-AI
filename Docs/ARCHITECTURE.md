@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-08
-version: 1.3.0
+last_reviewed: 2026-08-17
+version: 1.3.1
 ---
 
 # ARCHITECTURE.md
@@ -105,8 +105,9 @@ Redis ──► Celery worker ────┘
               │                         anything not public/synthetic
               ├─ Stage 5  schema validation       → reject malformed, no partial accept
               ├─ Stage 5b provenance merge        → match claimed raw_text back to an OCR
-              │             region's bbox/page (INV-2); no match = left unattached, never
-              │             fabricated (app/pipeline/provenance.py, [[ADR-012-provenance-merge-was-dead-code]])
+              │             region's bbox/page (INV-2); no match = source.unmatched: true,
+              │             never a fabricated bbox (app/pipeline/provenance.py,
+              │             [[ADR-012-provenance-merge-was-dead-code]])
               ├─ Stage 6  deterministic gates     → IBAN / CNIC / arithmetic
               └─ Stage 7  persist + route         → complete | needs_review
                             │
@@ -154,14 +155,26 @@ touching it failed.
 dict is built.** For every field whose `source.origin` is `llm_inferred` and `source.raw_text` is
 present, it does an exact substring search for that quote against the same joined OCR text
 `build_prompt` sent the LLM, and on a match attaches the matched region's `page`/`bbox`. No match
-leaves `source` exactly as the LLM produced it — never a fabricated box. This was previously dead
-code: `TextRegion.as_source()` existed and was unit-tested in isolation but nothing called it, so
-every real extraction shipped with no `page`/`bbox` on any field until
+sets `source.unmatched: true` and leaves `page`/`bbox` absent — never a fabricated box. This was
+previously dead code: `TextRegion.as_source()` existed and was unit-tested in isolation but nothing
+called it, so every real extraction shipped with no `page`/`bbox` on any field until
 [[ADR-012-provenance-merge-was-dead-code]] fixed it. A field whose claimed quote doesn't match
 anything is not a pipeline failure — it is logged and forces `needs_review`, the same weight as a
 failed or `format_only` gate ([[ADR-004-format-only-gate-state]]): an exact-substring check against
 reconstructed OCR text is itself fallible, so it can flag a document for review but cannot condemn
 the whole extraction.
+
+**`source.unmatched` is orchestrator-owned, the same way `verified`/`gate`/`gate_error` are
+(new in schema 0.3.1).** `_attach_field` clears any pre-existing `unmatched` key before deciding
+whether to set it, on every field it touches — top-level and line items alike — so a model that
+outputs the key gets it discarded and recomputed, never trusted. It is categorically different from
+`verified: false`: an unverified field simply has no gate confirming its value; an unmatched field's
+**cited source text does not exist anywhere in the OCR output** — the model's claimed evidence for
+the value is itself fabricated or misquoted, independent of whether the value happens to be right.
+The two can co-occur (a field can pass its gate on the value while its citation is unmatched) or
+neither: this key says nothing about the value's correctness, only about the citation's honesty.
+API and UI render it as its own signal, not folded into "Unverified" ([[API_CONTRACT]] §4,
+`DocumentReview.jsx`'s `UnmatchedClaimBadge`).
 
 **The gate registry (`DEFAULT_GATES`) is an explicit tuple, not import-scanning.** A gate module
 that exists under `pipeline/gates/` but is not added to that tuple never runs — a silent hole, by

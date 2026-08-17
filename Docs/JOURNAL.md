@@ -28,6 +28,159 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-17 — `source.unmatched` surfaces fabricated provenance quotes to the API and UI (schema 0.3.1)
+
+**Touched:** INV-2 (extended, not reversed) · `CodeBase/backend/app/pipeline/provenance.py`,
+`Docs/EXTRACTION_SCHEMA.json` (0.3.0 → 0.3.1), `CodeBase/backend/app/db/models.py` (`SCHEMA_VERSION`),
+`CodeBase/backend/app/db/migrations/versions/0003_schema_version_0_3_1.py` (new),
+`CodeBase/backend/app/db/fixtures.py`, `CodeBase/backend/tests/unit/test_provenance.py`,
+`CodeBase/backend/tests/unit/test_orchestrator.py`, `CodeBase/backend/tests/integration/conftest.py`,
+`CodeBase/backend/tests/contract/test_api_contract.py`, `Docs/ARCHITECTURE.md` §2 (Stage 5b),
+`Docs/API_CONTRACT.md` §4 (0.3.5 → 0.3.6),
+`CodeBase/frontend/documind-ai/src/components/screens/DocumentReview.jsx`, branch
+`feat/status-error-and-contract-ownership`, off `master`
+
+**Did:** The earlier session's live run against `Azeem.jpeg`/`Azeem.pdf` surfaced a real LLM
+hallucination — a fabricated line item with a `raw_text` quote that doesn't exist anywhere in the
+source. Checked whether that class of failure (a claimed quote that provenance-merge can't find in
+the OCR text) reaches the API at all: it didn't. `attach_provenance()` computed
+`ProvenanceReport.unmatched_claims` correctly, but the orchestrator only used it for logging and the
+`needs_review` decision — it was never attached to the field it belonged to, so the API and UI had
+no way to distinguish "no gate covers this field" from "the model's own cited evidence for this
+field is fabricated." Fixed at the source: `_attach_field` now sets `source.unmatched = true` on the
+exact field/line-item entry whose claim didn't match, and clears any pre-existing value otherwise —
+authoritatively, the same way `verified`/`gate`/`gate_error` are orchestrator-owned regardless of
+what the model output. Because `fields`/`line_items` are mutated in place and referenced directly by
+`orchestrator.py`'s `result` dict, no orchestrator.py change was needed at all — the fix is entirely
+inside `provenance.py`. Added the property to `EXTRACTION_SCHEMA.json` (`$defs/source`, optional,
+present only when `true`), which meant bumping `schema_version` 0.3.0 → 0.3.1 per this project's own
+"additive change → version bump" convention, which meant a new migration for the DB's
+`extractions_schema_version_current` CHECK constraint, which meant re-seeding `fixtures.py` and every
+test that pinned the literal `"0.3.0"`. Rendered it in `DocumentReview.jsx` as its own
+`UnmatchedClaimBadge` (destructive/`AlertTriangle`), additive alongside — never replacing — the
+existing Verified/Unverified badge, since a field can be gate-verified on its value while its
+citation is unmatched, or vice versa; the two are orthogonal signals.
+
+**Learned / broke:** The three local Postgres databases this project's test layers use
+(`ptcl_test`, `ptcl_contract`, and the dev `ptcl` DB) are never dropped between sessions — only
+`TRUNCATE`d per-test at best — so a new CHECK constraint that tightens an existing column (here,
+`schema_version`'s exact-match check) fails to apply via `alembic upgrade head` the moment any of
+those databases holds even one older row, with an error that looks like a broken migration rather
+than what it is: stale local state. Confirmed via `git stash -u` that the unrelated
+`test_download_export_returns_binary[real]` failure pre-dates this session's changes (still fails
+identically on unmodified `master`) — not a regression, left unfixed as out of scope.
+
+**Next:** The Excel exporter (`app/export/xlsx.py`) never reads `source` at all, so a field that is
+gate-verified but provenance-unmatched exports with no amber flag today — confirmed, not fixed;
+would need its own scoped change if that gap matters enough to close.
+
+## 2026-08-17 — UploadCenter classification selector shipped; first two real PTCL documents run end to end (ADR-014)
+
+**Touched:** INV-6 (exercised, not changed) ·
+`CodeBase/frontend/documind-ai/src/components/screens/UploadCenter.jsx`,
+`Docs/decisions/ADR-014-hosted-processing-exception-for-two-named-documents.md` (new),
+`Docs/PROJECT_CONTEXT.md` §8, `Docs/INDEX.md`, branch `feat/status-error-and-contract-ownership`
+
+**Did:** `UploadCenter.jsx` hardcoded `data_classification: 'synthetic'` on every upload, which made
+INV-6's guard unenforceable from the UI — any file, real or not, went out the door pre-classified
+"safe." Replaced it with a required `<select>` (`public` / `synthetic` / `restricted`, no default;
+`""` is not a valid option) that gates the dropzone and Browse button until a value is chosen.
+`API_CONTRACT.md` §2 already documented `data_classification`'s allowed values and default-deny
+behavior in full from the prior session's work — nothing to add there. Wrote
+[[ADR-014-hosted-processing-exception-for-two-named-documents]] recording that `Azeem.jpeg` (a Road
+Master → PTCL purchase order, scanned/stamped/signed) and `Azeem.pdf` (a 12-page PTCL–DTMS addendum)
+are uploaded `public` under verbal authorization for a one-off hosted-profile test — per-document,
+not a category, INV-6's code untouched. Then started the real stack (Postgres, Redis, `uvicorn`,
+`vite`) and ran both documents through it: one via `curl`, one through the live UI (confirming the
+new selector actually gates upload and the `public` value reaches the API), both landing on
+`needs_review` with no errors.
+
+**Learned / broke:** The `line_item_sum` gate is not decorative — it caught a real LLM hallucination.
+`Azeem.jpeg`'s line-items table has one priced row (CPU, $533) and four rows with blank price cells
+(RAM/Storage/Public IP/Network Bandwidth); the model invented a second priced row ("RAM 16 GB",
+qty 20, unit $27.68, total $553.60 — none of these numbers appear anywhere in the source) complete
+with a fabricated `raw_text` quote, and the gate flagged the resulting sum mismatch
+(533.00 + 553.60 = 1086.60 ≠ subtotal 533.00) exactly as designed. Separately, `vendor_name`/
+`customer_name` came back as Road Master / PTCL — likely reversed, since a same-session read of
+`Azeem.pdf` page 4 shows PTCL explicitly named "Vendor" supplying compute/storage/RAM to a
+"Customer," the same category of line items as the PO — and the prompt (`extract_v1.txt`) has zero
+guidance on how to tell buyer from seller on a purchase order, only invoice-shaped assumptions.
+Provenance-merge resolved 8/17 claimed quotes on the skewed jpeg scan vs. 1/1 on the clean PDF
+render — no deskew stage exists in the pipeline today, and the one PDF page rasterized (the cover)
+carried effectively no extractable fields; the other eleven pages, including the one stamped
+"Confidentiality Statement," were never read. Full finding-by-finding writeup handed to Adeen for
+review before any of it gets fixed.
+
+**Next:** Awaiting Adeen's decision on which findings to fix (OCR/deskew, prompt PO-role guidance,
+missing `po_date`-shaped field, line-item hallucination guardrail) — nothing has been changed yet
+per instruction.
+
+## 2026-08-14 — API_CONTRACT ownership consolidates to Adeen (ADR-013); `/status.error` populated for two failure causes
+
+**Touched:** no INV directly · `Docs/decisions/ADR-013-single-owner-for-the-api-contract.md` (new),
+`Docs/API_CONTRACT.md` (owner, banner removed, 0.3.3 → 0.3.5), `Docs/PROJECT_CONTEXT.md` §4/§7/§8,
+`Docs/AGENT_RULES.md` §2/§5, `Docs/INDEX.md`, `CodeBase/backend/app/db/models.py` (+`Document.error`),
+`CodeBase/backend/app/db/migrations/versions/0002_document_error.py` (new),
+`CodeBase/backend/app/core/errors.py` (+`HOSTED_ENDPOINT_REFUSED`),
+`CodeBase/backend/app/workers/tasks.py`, `CodeBase/backend/app/services/documents.py`
+(`status_payload`), `CodeBase/backend/tests/integration/test_worker_errors.py` (new),
+`CodeBase/backend/tests/unit/test_status_payload.py` (new),
+`CodeBase/frontend/documind-ai/src/components/screens/DocumentReview.jsx`, branch
+`feat/status-error-and-contract-ownership`, off `master`
+
+**Did:** Two independent follow-ups.
+
+**(a) Ownership.** The backend/frontend split described in [[PROJECT_CONTEXT]] §4 ended — Adeen owns
+both sides now. Wrote [[ADR-013-single-owner-for-the-api-contract]] recording that the co-ownership
+gate in [[AGENT_RULES]] §2 (endpoint/status/error-code changes needing both owners to agree) is
+retired, not satisfied — the ADR is explicit that this does not retroactively mean 0.2.0/0.3.0 got a
+second review, only that the role the gate depended on no longer exists. Removed `API_CONTRACT.md`'s
+"Not agreed" banner, changed its owner to Adeen alone, and updated every other doc that named the
+two-party split as current (`PROJECT_CONTEXT` §4, `AGENT_RULES` §2's trigger table and §5's area-rule
+table, `INDEX.md`'s two owner columns). Left the historical record alone: ADR-007's text and every
+JOURNAL entry that says "the frontend dev has not been told" are append-only and were true when
+written — this session doesn't edit them, it explains why the sentence stops applying going forward.
+
+**(b) `/status.error`.** Was hardcoded `None` regardless of cause (`PROJECT_CONTEXT` §7's recorded
+gap). Populated for exactly two causes, per explicit scope — not every `OrchestratorError` subclass:
+`HostedEndpointRefusedError` (INV-6 refusing a `restricted` document at extraction) and the
+unclassified `except Exception` catch-all in `extract_document`. New nullable `documents.error` JSONB
+column (migration `0002`, `CHECK` constraint requiring `code`/`message`/`retryable` keys when
+non-null), populated via `app/core/errors.py`'s existing `envelope()` so the shape can't drift from
+the HTTP error envelope's. `HostedEndpointRefusedError`'s message is used verbatim — ADR-006 already
+constrains it to the document id and classification label, no document content, and
+`test_llm_guard.py` already proves that. The catch-all does **not** use `str(exc)` — an unclassified
+exception's text is an unknown quantity and could contain anything a downstream library embedded in
+an error message — instead it logs the real exception server-side under a fresh `trace_id` and
+returns a fixed generic message naming only that id. `status_payload()` now returns `document.error`
+instead of the hardcoded `None`. `DocumentReview.jsx`'s failure state (previously "still processing"
+for a terminal `failed` document — same bug independently found and fixed on the unrelated
+`fix/demo-rehearsal-issues` branch, redone here since this branch forked from `master` before that
+fix existed) now falls back to `GET /status` on a `NOT_READY` catch and, when `status.error` is
+present, renders its `message` directly instead of a generic placeholder.
+
+**Learned / broke:** Confirmed by tracing the call chain, not assumed: `HostedEndpointRefusedError` is
+a plain `RuntimeError`, not an `OrchestratorError` subclass, and `llm/repair.py`'s
+`complete_with_repair` only wraps `json.loads`/`validate` in `try/except` — the `complete()` call
+itself is unguarded — so the refusal propagates through `extract()` and `run_and_persist()` completely
+unwrapped and reaches `workers/tasks.py`'s exception handling exactly once, in the right shape to
+catch specifically. `tests/contract/`'s fake LLM client (`conftest.py`'s `_fake_llm_client`) is
+deliberately built with `Endpoint.LOCAL`, so the real contract suite can never exercise
+`HOSTED_ENDPOINT_REFUSED` — coverage for it lives in the new integration test, which builds its own
+`Endpoint.HOSTED` client and monkeypatches `worker_tasks.build_llm_client`/`build_ocr_reader` directly.
+`tests/mock_server.py`'s `/status` still hardcodes `"error": None` — left alone, since the mock has no
+path to reach `status: "failed"` at all through its own upload/progression flow, so there's nothing
+for it to populate; the response *shape* (`error: null | object`) still matches the real app either
+way.
+
+**Next:** The other three `OrchestratorError` subclasses (`OCRFailedError`, `ExtractionFailedError`,
+`GateCoverageError`) still leave `error: null` — `PROJECT_CONTEXT` §7 now names this precisely instead
+of describing the field as unconditionally null. `test_download_export_returns_binary[real]`'s
+pre-existing timing bug (diagnosed and fixed on `fix/demo-rehearsal-issues`, unrelated to this branch)
+still reproduces here since this branch forked from `master` before that fix landed — not touched,
+out of scope for this session. Branch `feat/status-error-and-contract-ownership` has both fixes,
+nothing committed.
+
 ## 2026-08-13 — demo-rehearsal punch list: five fixes plus a mock-fidelity gap in the export contract test, `fix/demo-rehearsal-issues`
 
 **Touched:** no INV directly (see Learned/broke for what each protects) · `dev.sh` (Celery pool),

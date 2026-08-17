@@ -1,26 +1,22 @@
 ---
 status: draft
-owner: Adeen & Frontend
-last_reviewed: 2026-08-13
-version: 0.3.4
+owner: Adeen
+last_reviewed: 2026-08-17
+version: 0.3.7
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.4 · **Status:** Draft — freeze before frontend work starts
-**Owners:** backend (Adeen) + frontend (friend). Changes require both.
+**Version:** 0.3.7 · **Status:** Draft — freeze before frontend work starts
+**Owner:** Adeen, backend and frontend both. Single owner as of
+[[decisions/ADR-013-single-owner-for-the-api-contract]] (2026-08-14) — previously co-owned with a
+separate frontend developer; see that ADR for what changed. Changes still land with the version
+bumped in the same commit (§ Ground rules, rule 4); there is no longer a separate agreement step.
 
 > ✅ **Implemented.** Every endpoint below is now served by the real application
 > (`backend/app/main.py`, `uv run uvicorn app.main:app`), backed by Postgres. The mock in
 > `backend/tests/mock_server.py` is still shipped and still runs — both are exercised by the same
 > contract suite (§10).
->
-> ⚠️ **Not agreed. The frontend dev has still not been told about 0.2.0, 0.3.0, or 0.3.4.** All are
-> breaking or additive-but-load-bearing. 0.2.0 removed `gates[].passed`; 0.3.0 adds a **required**
-> `data_classification` on upload and adds `profile` to `pipeline_version`; 0.3.4 adds a new export
-> error code, `DOCUMENTS_NOT_EXPORTABLE` (§6). §4's ground rule 4 says removing or renaming a field
-> needs both owners to agree first — one owner has seen any of the three so far. This banner comes
-> off when he has read all three and agreed, not when the code is written.
 
 Base path: `/api/v1`. All bodies JSON unless stated. All timestamps ISO-8601 UTC.
 
@@ -31,7 +27,9 @@ Base path: `/api/v1`. All bodies JSON unless stated. All timestamps ISO-8601 UTC
 1. Extraction is **async**. Upload returns immediately; the client polls or subscribes.
 2. Field shapes come from `EXTRACTION_SCHEMA.json`. This file does not restate them — it references them.
 3. Errors always use the envelope in §7. Frontend renders `message`; logs `code` and `trace_id`.
-4. Additive changes (new optional field) → minor bump, no coordination. Removing or renaming a field → major bump, both sides agree first.
+4. Additive changes (new optional field) → minor bump. Removing or renaming a field → major bump,
+   recorded as a deliberate breaking change — no separate agreement step since
+   [[decisions/ADR-013-single-owner-for-the-api-contract]].
 
 ---
 
@@ -148,6 +146,40 @@ GET /api/v1/documents/{id}/status
 
 Poll interval: 2 s while not terminal. Terminal states: `complete`, `needs_review`, `failed`.
 
+### `error` is populated for two failure causes (new in 0.3.5)
+
+`error` is `null` unless `status` is `failed`, and even then it is only populated for the two causes
+below — everything else that can fail extraction still reports `null`. When present, it is the same
+shape as an error envelope's inner object (§8), minus the HTTP status code:
+
+```json
+"error": {
+  "code": "HOSTED_ENDPOINT_REFUSED",
+  "message": "INV-6: refusing to send document <id> to a hosted LLM endpoint. data_classification is restricted; only public, synthetic may leave this machine.",
+  "trace_id": "uuid",
+  "retryable": false
+}
+```
+
+| Cause | `code` | `retryable` |
+|---|---|---|
+| INV-6 guard refused a hosted call ([[ARCHITECTURE]] §1, `HostedEndpointRefusedError`) | `HOSTED_ENDPOINT_REFUSED` | `false` — the document's classification is immutable, so retrying reprocesses into the same refusal |
+| Any other unclassified exception | `INTERNAL` | `true` |
+
+**Still `null`:** OCR failure, LLM schema-validation failure after repair, and gate-coverage failure
+(`OrchestratorError` and its subclasses) — their cause reaches the server log with a `stage`, but not
+yet the API. This is a narrower version of the gap this section used to describe in full; see
+[[PROJECT_CONTEXT]] §7's "Known gaps" for the current boundary.
+
+**`message` never contains document content, by construction, not by filtering.**
+`HOSTED_ENDPOINT_REFUSED`'s message is `HostedEndpointRefusedError`'s own text, which
+[[decisions/ADR-006-two-deployment-profiles]] already constrains to the document id and the
+classification label only. `INTERNAL`'s message is a fixed string naming only `trace_id` — the
+triggering exception's own text is logged server-side and never placed in the API response, because
+an arbitrary unclassified exception is exactly the case where "what does this string contain" cannot
+be answered in advance. **Frontend: render `message` as-is; do not attempt to extract more detail from
+it than is there.**
+
 ---
 
 ## 4. Extraction result
@@ -189,8 +221,39 @@ well-formed value is the right one. `iban_checksum` is the only identifier gate 
 **Frontend: render `format_only` as unconfirmed, alongside `failed`, not alongside `passed`.**
 Treating it as a pass reintroduces exactly the failure the gates exist to prevent — see
 [`decisions/ADR-004-format-only-gate-state.md`](./decisions/ADR-004-format-only-gate-state.md).
-Field shapes remain defined by `EXTRACTION_SCHEMA.json` (now 0.3.0), which this file references
+Field shapes remain defined by `EXTRACTION_SCHEMA.json` (now 0.3.1), which this file references
 rather than restates.
+
+### `source.unmatched` (new in 0.3.1)
+
+A field's `source` object gains an **optional** `unmatched` boolean, present (`true`) only when
+applicable — omitted otherwise, never `false`:
+
+```json
+"source": {
+  "origin": "llm_inferred",
+  "raw_text": "GST %5 Net Total Amount with tax $559.65",
+  "unmatched": true
+}
+```
+
+Set when `source.origin` is `llm_inferred` and `source.raw_text` is present, but that exact quote
+cannot be found anywhere in the document's OCR text. **This is categorically different from
+`verified: false`.** Unverified means no deterministic gate confirmed the *value*. Unmatched means
+the model's cited *evidence* for the value — the quote it claims to have read off the page — does
+not exist in the OCR output; the citation itself is fabricated or misquoted, independent of whether
+the value happens to be correct. The two are orthogonal and can co-occur: a field can pass its gate
+on the value while its citation is unmatched, or vice versa.
+
+**Frontend: render `unmatched: true` as its own distinct signal, never folded into "Unverified."**
+An unverified-but-matched field has an honest citation the reviewer can click through to on the
+document image; an unmatched field's citation is not there to click through to at all — treating
+the two the same hides exactly the failure this flag exists to surface.
+
+`unmatched` is orchestrator-computed (`app/pipeline/provenance.py`), the same way `verified`/`gate`/
+`gate_error` are — a model that outputs this key on its own has it discarded and recomputed, never
+trusted as-is. It never implies a fabricated `page`/`bbox`: a field with `unmatched: true` never
+also carries `page`/`bbox`, since those are set only on a successful match.
 
 ### `pipeline_version.profile` (new in 0.3.0)
 
@@ -203,7 +266,7 @@ rather than restates.
   "ocr_urdu": "qaari-0.1-urdu",
   "llm": "qwen2.5-7b-instruct",
   "prompt_hash": "sha256:2f1a9c",
-  "schema_version": "0.3.0"
+  "schema_version": "0.3.1"
 }
 ```
 
@@ -213,7 +276,7 @@ equivalent runs. They are not: different LLM, different hardware, possibly diffe
 
 **Frontend: if you show or compare pipeline versions anywhere, `profile` is part of the identity,
 not a label.** Two results with the same `prompt_hash` and different profiles are two different
-results. `schema_version` is now `"0.3.0"`; a payload still carrying `"0.2.0"` is stale.
+results. `schema_version` is now `"0.3.1"`; a payload still carrying `"0.3.0"` or earlier is stale.
 
 ---
 
@@ -334,8 +397,14 @@ on `filename`.
 | `OCR_FAILED` | 422 | yes |
 | `EXTRACTION_FAILED` | 422 | yes |
 | `DOCUMENTS_NOT_EXPORTABLE` | 422 | no |
+| `HOSTED_ENDPOINT_REFUSED` | 422 | no |
 | `RATE_LIMITED` | 429 | yes |
 | `INTERNAL` | 500 | yes |
+
+**`HOSTED_ENDPOINT_REFUSED` never arrives as an HTTP error response.** Every other code in this table
+is returned synchronously, on the request that triggered it. This one only ever appears inside a
+terminal `GET .../status`'s `error` field (§3), because the refusal happens inside the async
+extraction task, after the upload request that started it has already returned `202`.
 
 ---
 

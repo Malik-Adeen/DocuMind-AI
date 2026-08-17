@@ -7,11 +7,17 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { UploadCloud, FileUp, FileCheck, AlertCircle, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
 
 const MAX_FILES_PER_DROP = 20;
+const CLASSIFICATIONS = [
+  { value: 'public', label: 'Public — publicly available document' },
+  { value: 'synthetic', label: 'Synthetic — generated, no real party in it' },
+  { value: 'restricted', label: 'Restricted — anything else, including anything not yet looked at' },
+];
 
 export default function UploadCenter({ onAddDocumentToQueue }) {
   const [uploads, setUploads] = useState([]);
   const [dragging, setDragging] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [classification, setClassification] = useState('');
   const fileInputRef = useRef(null);
   const nextUploadId = useRef(0);
 
@@ -30,8 +36,7 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
     setUploads((prev) => [pendingUpload, ...prev]);
 
     try {
-      // Default classification 'synthetic' — prototype profile permits public and synthetic only (ADR-006)
-      const response = await uploadDocument(file, 'synthetic');
+      const response = await uploadDocument(file, classification);
       setUploads((prev) =>
         prev.map((item) =>
           item.id === uploadId
@@ -56,6 +61,11 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
   const submitFiles = (fileList) => {
     const files = Array.from(fileList);
     if (files.length === 0) return;
+
+    if (!classification) {
+      setUploadError('Select a data classification before uploading.');
+      return;
+    }
 
     setUploadError('');
 
@@ -119,6 +129,27 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
         </Alert>
       )}
 
+      {/* Data classification — required, no default (INV-6) */}
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="data-classification" className="text-xs font-label-md font-semibold text-foreground">
+          Data classification <span className="text-destructive">*</span>
+        </label>
+        <select
+          id="data-classification"
+          value={classification}
+          onChange={(e) => setClassification(e.target.value)}
+          className="w-full max-w-sm rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/60"
+        >
+          <option value="" disabled>Select classification…</option>
+          {CLASSIFICATIONS.map((c) => (
+            <option key={c.value} value={c.value}>{c.label}</option>
+          ))}
+        </select>
+        <p className="text-[11px] text-muted-foreground">
+          Only <span className="font-semibold">public</span> and <span className="font-semibold">synthetic</span> documents may leave this machine. Choose <span className="font-semibold">restricted</span> for anything not yet looked at.
+        </p>
+      </div>
+
       {/* Hidden file input */}
       <input
         type="file"
@@ -131,14 +162,21 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
 
       {/* Drag & Drop Upload Zone */}
       <div
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={handleBrowseClick}
-        className={`relative rounded-xl p-10 border-2 border-dashed flex flex-col items-center justify-center text-center min-h-[280px] cursor-pointer group transition-all duration-200 ${
-          dragging
+        onDragOver={classification ? handleDragOver : undefined}
+        onDragLeave={classification ? handleDragLeave : undefined}
+        onDrop={classification ? handleDrop : undefined}
+        onClick={classification ? handleBrowseClick : () => setUploadError('Select a data classification before uploading.')}
+        aria-disabled={!classification}
+        className={`relative rounded-xl p-10 border-2 border-dashed flex flex-col items-center justify-center text-center min-h-[280px] group transition-all duration-200 ${
+          !classification
+            ? 'cursor-not-allowed opacity-50 border-border/40 bg-card/20'
+            : 'cursor-pointer'
+        } ${
+          classification && dragging
             ? 'border-primary bg-primary/10 scale-[0.99] shadow-inner'
-            : 'border-border/60 hover:border-primary/60 bg-card/40 hover:bg-card/70'
+            : classification
+            ? 'border-border/60 hover:border-primary/60 bg-card/40 hover:bg-card/70'
+            : ''
         }`}
       >
         <div className="p-4 rounded-full bg-primary/10 text-primary mb-4 group-hover:scale-110 transition-transform duration-200">
@@ -150,7 +188,7 @@ export default function UploadCenter({ onAddDocumentToQueue }) {
         <p className="text-xs text-muted-foreground mb-5">
           or click anywhere to browse from your device — select multiple files, up to {MAX_FILES_PER_DROP} at a time
         </p>
-        <Button variant="outline" size="sm" onClick={handleBrowseClick} className="gap-2 mb-6">
+        <Button variant="outline" size="sm" onClick={handleBrowseClick} disabled={!classification} className="gap-2 mb-6">
           <FileUp className="w-4 h-4" />
           Browse Files
         </Button>

@@ -42,7 +42,7 @@ EXPORT_FORMATS = ("xlsx", "csv", "json")
 EXPORT_STATUSES = ("queued", "complete", "failed")
 PROFILES = ("prototype", "production")
 ROLES = ("viewer", "reviewer", "admin")
-SCHEMA_VERSION = "0.3.0"
+SCHEMA_VERSION = "0.3.1"
 
 
 def _one_of(column: str, allowed: tuple[str, ...]) -> str:
@@ -93,6 +93,7 @@ class Document(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     uploaded_at: Mapped[datetime] = _created_at()
+    error: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         CheckConstraint(
@@ -102,6 +103,10 @@ class Document(Base):
         CheckConstraint(_one_of("status", DOCUMENT_STATUSES), name="documents_status_valid"),
         CheckConstraint(_one_of("document_type", DOCUMENT_TYPES), name="documents_type_valid"),
         CheckConstraint("byte_size >= 0", name="documents_byte_size_non_negative"),
+        CheckConstraint(
+            "error IS NULL OR (error ? 'code' AND error ? 'message' AND error ? 'retryable')",
+            name="documents_error_shaped",
+        ),
         Index("ix_documents_status", "status"),
         Index("ix_documents_uploaded_at", "uploaded_at"),
     )

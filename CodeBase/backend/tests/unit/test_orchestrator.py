@@ -237,7 +237,7 @@ def test_pipeline_version_is_stamped_with_profile_model_and_prompt_hash() -> Non
     assert version["profile"] == "prototype"
     assert version["llm"] == "fake-hosted-model"
     assert version["ocr_latin"] == "paddleocr-pp-ocrv5"
-    assert version["schema_version"] == "0.3.0"
+    assert version["schema_version"] == "0.3.1"
     assert version["prompt_hash"] == f"sha256:{_expected_hash(regions())}"
 
 

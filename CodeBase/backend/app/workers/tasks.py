@@ -9,10 +9,16 @@ from pathlib import Path
 import httpx
 
 from app.core.config import get_settings
+from app.core.errors import envelope
 from app.db.models import Document, Export
 from app.db.session import get_sessionmaker
 from app.export.xlsx import write_workbook
-from app.pipeline.llm.client import DeploymentProfile, Endpoint, LLMClient
+from app.pipeline.llm.client import (
+    DeploymentProfile,
+    Endpoint,
+    HostedEndpointRefusedError,
+    LLMClient,
+)
 from app.pipeline.llm.transport import HostedChatTransport
 from app.pipeline.ocr.paddle import PaddleLatinOCR
 from app.pipeline.orchestrator import OCRReader, OrchestratorError, run_and_persist
@@ -74,14 +80,39 @@ def extract_document(document_id: str) -> None:
                 ocr=build_ocr_reader(),
                 llm=build_llm_client(),
             )
+        except HostedEndpointRefusedError as exc:
+            error_trace_id = uuid.uuid4()
+            document.status = "failed"
+            document.error = envelope("HOSTED_ENDPOINT_REFUSED", str(exc), str(error_trace_id))[
+                "error"
+            ]
+            session.commit()
+            logger.error(
+                "extract_document: %s refused by INV-6 guard (trace_id=%s): %s",
+                document_id,
+                error_trace_id,
+                exc,
+            )
         except OrchestratorError as exc:
             document.status = "failed"
             session.commit()
             logger.error("extract_document: %s failed at stage %s: %s", document_id, exc.stage, exc)
         except Exception as exc:
+            error_trace_id = uuid.uuid4()
             document.status = "failed"
+            document.error = envelope(
+                "INTERNAL",
+                f"Extraction failed unexpectedly. Server logs have detail under trace_id "
+                f"{error_trace_id}.",
+                str(error_trace_id),
+            )["error"]
             session.commit()
-            logger.error("extract_document: %s failed unexpectedly: %s", document_id, exc)
+            logger.error(
+                "extract_document: %s failed unexpectedly (trace_id=%s): %s",
+                document_id,
+                error_trace_id,
+                exc,
+            )
             raise
 
 

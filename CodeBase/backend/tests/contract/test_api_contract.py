@@ -446,7 +446,7 @@ def test_pipeline_version_stamps_the_profile(
     body = client.get(f"/api/v1/documents/{document_id}/extraction", headers=reviewer).json()
     pipeline_version = body["pipeline_version"]
     assert pipeline_version["profile"] in {"prototype", "production"}
-    assert pipeline_version["schema_version"] == "0.3.0"
+    assert pipeline_version["schema_version"] == "0.3.1"
 
 
 def test_pipeline_version_without_a_profile_is_rejected(
