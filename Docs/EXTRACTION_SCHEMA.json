@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://internal/doc-intel/extraction-schema-0.3.0.json",
+  "$id": "https://internal/doc-intel/extraction-schema-0.3.1.json",
   "title": "ExtractionResult",
   "description": "The only shape an extraction result ever takes. LLM output, DB row, API response and Excel columns all derive from this. Field declaration order defines Excel column order.",
   "type": "object",
@@ -23,7 +23,11 @@
           "minItems": 4,
           "maxItems": 4
         },
-        "raw_text": { "type": "string" }
+        "raw_text": { "type": "string" },
+        "unmatched": {
+          "type": "boolean",
+          "description": "True only when raw_text was claimed (origin llm_inferred) but no exact substring match was found in the OCR text — a fabricated or misquoted citation, categorically different from a field that simply has no gate covering it. Omitted, never false, when not applicable. Orchestrator-owned (app/pipeline/provenance.py); a model that outputs this key has it discarded and recomputed, same as verified/gate/gate_error (new in 0.3.1)."
+        }
       }
     },
 
@@ -72,7 +76,7 @@
         "ocr_urdu": { "type": "string", "examples": ["qaari-0.1-urdu"] },
         "llm": { "type": "string", "examples": ["qwen2.5-7b-instruct"] },
         "prompt_hash": { "type": "string" },
-        "schema_version": { "type": "string", "const": "0.3.0" }
+        "schema_version": { "type": "string", "const": "0.3.1" }
       }
     },
     "status": { "enum": ["complete", "needs_review", "failed"] },

@@ -66,18 +66,22 @@ def _attach_field(
 ) -> None:
     source: dict[str, Any] = entry["source"]
     if source.get("origin") != "llm_inferred":
+        source.pop("unmatched", None)
         return
     raw_text = source.get("raw_text")
     if not raw_text:
+        source.pop("unmatched", None)
         return
     counts["claimed"] += 1
     match = _match_region_span(raw_text, joined_text, spans)
     if match is None:
         unmatched.append(name)
+        source["unmatched"] = True
         return
     page, bbox = match
     source["page"] = page
     source["bbox"] = list(bbox)
+    source.pop("unmatched", None)
     counts["resolved"] += 1
 
 

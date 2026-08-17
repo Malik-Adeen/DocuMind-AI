@@ -28,6 +28,7 @@ def test_exact_single_region_match_attaches_bbox_and_page() -> None:
     source = fields["po_number"]["source"]
     assert source["page"] == 1
     assert source["bbox"] == [0.1, 0.1, 0.4, 0.15]
+    assert "unmatched" not in source
     assert report.claimed_fields == 1
     assert report.resolved_fields == 1
     assert report.unmatched_claims == ()
@@ -68,8 +69,20 @@ def test_unmatched_raw_text_is_recorded_not_fabricated() -> None:
     source = fields["iban"]["source"]
     assert "bbox" not in source
     assert "page" not in source
+    assert source["unmatched"] is True
     assert report.unmatched_claims == ("iban",)
     assert report.resolved_fields == 0
+
+
+def test_unmatched_flag_is_orchestrator_owned_not_model_supplied() -> None:
+    claimed_and_matched = field("PO-2291", raw_text="PO Number: PO-2291")
+    claimed_and_matched["source"]["unmatched"] = True
+    fields = {"po_number": claimed_and_matched}
+    regions = [region("PO Number: PO-2291", bbox=(0.1, 0.1, 0.4, 0.15))]
+
+    attach_provenance(fields, [], regions)
+
+    assert "unmatched" not in fields["po_number"]["source"]
 
 
 def test_non_llm_origin_is_skipped() -> None:

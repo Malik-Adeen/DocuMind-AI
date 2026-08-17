@@ -145,7 +145,7 @@ def status_payload(document: Document) -> dict[str, Any]:
         "status": document.status,
         "progress": progress,
         "stage_detail": stage_detail,
-        "error": None,
+        "error": document.error,
     }
 
 

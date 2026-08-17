@@ -8,7 +8,7 @@ PIPELINE_VERSION: dict[str, Any] = {
     "ocr_urdu": "qaari-0.1-urdu",
     "llm": "qwen2.5-7b-instruct",
     "prompt_hash": "sha256:2f1a9c",
-    "schema_version": "0.3.0",
+    "schema_version": "0.3.1",
 }
 
 DOC_FAILED_GATE = "11111111-1111-1111-1111-111111111111"

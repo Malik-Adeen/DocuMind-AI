@@ -20,6 +20,7 @@ CODES: dict[str, tuple[int, bool]] = {
     "OCR_FAILED": (422, True),
     "EXTRACTION_FAILED": (422, True),
     "DOCUMENTS_NOT_EXPORTABLE": (422, False),
+    "HOSTED_ENDPOINT_REFUSED": (422, False),
     "RATE_LIMITED": (429, True),
     "INTERNAL": (500, True),
 }
