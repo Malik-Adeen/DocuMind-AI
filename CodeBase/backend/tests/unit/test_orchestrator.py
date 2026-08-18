@@ -15,6 +15,7 @@ from app.pipeline.llm.client import (
     LLMClient,
 )
 from app.pipeline.llm.prompt_builder import build_prompt
+from app.pipeline.llm.transport import TruncatedResponseError
 from app.pipeline.ocr.paddle import TextRegion
 from app.pipeline.orchestrator import (
     DEFAULT_GATES,
@@ -57,6 +58,16 @@ class SequenceSpy:
         return self.responses[index]
 
 
+class TruncatingSpy:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls: list[str] = []
+
+    def __call__(self, prompt: str) -> str:
+        self.calls.append(prompt)
+        raise TruncatedResponseError(self.content)
+
+
 def regions(text: str = "PO Number: PO-2291\nTotal: 11700.00") -> list[TextRegion]:
     return [TextRegion(text=text, confidence=0.9, bbox=(0.1, 0.1, 0.5, 0.2), page=1)]
 
@@ -89,6 +100,17 @@ def hosted_llm(response: str) -> tuple[LLMClient, Spy]:
 
 def hosted_llm_sequence(responses: list[str]) -> tuple[LLMClient, SequenceSpy]:
     spy = SequenceSpy(responses)
+    client = LLMClient(
+        profile=DeploymentProfile.PROTOTYPE,
+        endpoint=Endpoint.HOSTED,
+        model="fake-hosted-model",
+        transport=spy,
+    )
+    return client, spy
+
+
+def truncating_hosted_llm(content: str) -> tuple[LLMClient, TruncatingSpy]:
+    spy = TruncatingSpy(content)
     client = LLMClient(
         profile=DeploymentProfile.PROTOTYPE,
         endpoint=Endpoint.HOSTED,
@@ -351,6 +373,66 @@ def test_llm_invalid_json_twice_exhausts_repair_and_raises() -> None:
         extract(document(), ocr=FakeOCR(regions()), llm=llm)
 
     assert len(spy.calls) == 2
+
+
+def test_truncated_response_recovers_complete_fields_and_routes_needs_review() -> None:
+    po_field = llm_field("PO-2291", source={"origin": "llm_inferred", "raw_text": "PO-2291"})
+    iban_field = llm_field(IBAN_VALID, source={"origin": "llm_inferred", "raw_text": IBAN_VALID})
+    truncated_body = (
+        '{"document_type": {"value": "invoice", "confidence": 0.95}, "fields": {'
+        f'"po_number": {json.dumps(po_field)}, '
+        f'"iban": {json.dumps(iban_field)}, '
+        '"notes": {"value": "terms and conditions that go on for a while and then just sto'
+    )
+    llm, spy = truncating_hosted_llm(truncated_body)
+
+    outcome = extract(document(), ocr=FakeOCR(regions(IBAN_VALID)), llm=llm)
+
+    assert outcome.truncated is True
+    assert outcome.status == "needs_review"
+    assert outcome.result["review"] == {"required": True, "reason": "llm_output_truncated"}
+    assert set(outcome.result["fields"]) == {"po_number", "iban"}
+    assert outcome.result["fields"]["iban"]["verified"] is True, (
+        "gates must still run normally over whatever survived salvage"
+    )
+
+
+def test_truncated_response_is_not_retried_via_the_repair_prompt_loop() -> None:
+    truncated_body = (
+        '{"document_type": {"value": "invoice", "confidence": 0.95}, "fields": {'
+        f'"po_number": {json.dumps(llm_field("PO-2291"))}, "notes": {{"value": "cut off mid-strin'
+    )
+    llm, spy = truncating_hosted_llm(truncated_body)
+
+    extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert len(spy.calls) == 1, "truncation must bypass complete_with_repair's retry loop entirely"
+
+
+def test_truncated_response_with_nothing_recoverable_raises_extraction_failed() -> None:
+    llm, spy = truncating_hosted_llm('{"document_type": {"value": "in')
+
+    with pytest.raises(ExtractionFailedError, match="truncated"):
+        extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert len(spy.calls) == 1
+
+
+def test_truncated_response_drops_an_incomplete_field_entry_but_keeps_the_complete_ones() -> None:
+    truncated_body = (
+        '{"document_type": {"value": "invoice", "confidence": 0.95}, "fields": {'
+        f'"po_number": {json.dumps(llm_field("PO-2291"))}, '
+        '"total": {"value": "45000.0'
+    )
+    llm, spy = truncating_hosted_llm(truncated_body)
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.truncated is True
+    assert "po_number" in outcome.result["fields"]
+    assert "total" not in outcome.result["fields"], (
+        "an entry missing confidence/verified/source after salvage must be dropped, not guessed at"
+    )
 
 
 def _body_with_null_raw_text() -> str:

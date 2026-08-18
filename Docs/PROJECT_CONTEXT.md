@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-17
-version: 1.1.3
+last_reviewed: 2026-08-18
+version: 1.1.5
 ---
 
 # PROJECT_CONTEXT.md — Second Brain
@@ -160,6 +160,34 @@ Keep this list short and honest. Move items to a decision below once resolved.
       `ntn_format_check` and `strn_format_check`, but [[EXTRACTION_SCHEMA.json]]'s `fields` block
       has no `ntn`/`strn` field for either to check against. First found 2026-08-10 ([[JOURNAL]]),
       still unfixed.
+- [ ] **A malformed money value can orphan its well-formed siblings and hard-kill the whole
+      document, not just itself.** Found 2026-08-18 while live-testing [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]]
+      (1 of 6 real uploads of the same document, unrelated to truncation — `document b45b59f6`,
+      `INV-1: money field(s) tax reached persistence with no gate verdict attached`). Root cause in
+      `app/pipeline/gates/arithmetic.py`: `_check_totals()` and `_check_mrc_otc()` each parse their
+      2–3 money fields **sequentially inside one shared `try` block**
+      (`subtotal = _money(...); tax = _money(...); total = _money(...)`, similarly `mrc`/`otc`). If
+      the Nth field raises `_MalformedAmountError`, the function returns immediately naming only
+      that field — every field parsed *before* N (already successfully parsed) and every field
+      *after* N (never reached) gets no `GateResult` from this function at all. If no other gate
+      independently names them, `_assert_money_fields_gated`'s INV-1 check correctly (by its own
+      logic) sees a present, valued, ungated money field and raises `GateCoverageError` — the whole
+      document fails, not just the malformed field. Confirmed by direct reproduction: a malformed
+      `subtotal` orphans `tax` and `total`; a malformed `tax` orphans `total`; `mrc`/`otc` orphan
+      each other the same way. `subtotal` alone is structurally immune — `_check_line_items` parses
+      it independently and redundantly names it either way. No precise production rate measured (no
+      metric currently tracks `GateCoverageError` frequency); structurally it fires whenever the
+      model emits one non-`-?[0-9]+\.[0-9]{2}` money string ahead of a well-formed sibling in parse
+      order, which real hosted-model output on this document family has already been observed doing
+      (`"%5"` for a GST rate, digit-duplication misreads — see the deskew-task provenance report).
+      **This is a false positive of a structurally-correct assertion, not a case for loosening
+      INV-1** — `_assert_money_fields_gated` should stay a hard failure (same structural-fact-vs-
+      fallible-judgment distinction [[ADR-012-provenance-merge-was-dead-code]] already draws for why
+      *its* check gets a hard raise and provenance-matching doesn't); the fix belongs in
+      `_check_totals`/`_check_mrc_otc` evaluating each field's parse independently so one malformed
+      value can no longer suppress a verdict on fields that are perfectly checkable on their own.
+      Out of scope for `fix/llm-truncation-detection` (different module, different root cause);
+      filed here rather than fixed inline.
 - [ ] **[[ADR-009-omission-is-invisible-to-the-gate-layer]] needs amending — its claim isn't true
       for every gate.** ADR-009 holds that no gate should be expected to catch field omission. The
       2026-08-10 real-path run ([[JOURNAL]]) showed `line_item_sum` doing exactly that: the model
@@ -188,6 +216,7 @@ it with a new one.
 - [[ADR-012-provenance-merge-was-dead-code]] — INV-2 shipped unenforced since ADR-002: `TextRegion.as_source()` was dead code, so every real extraction carried no `source.page`/`source.bbox`. Fixed with a provenance-merge stage that matches a field's claimed `raw_text` back to its OCR region; an unmatched claim is logged and forces `needs_review`, it does not fail the extraction — the match itself is a fallible check and must not be authoritative, same logic as `format_only` (ADR-004). First real-run evidence: 277/283 (97.9%) claimed quotes resolved across 3 synthetic invoices.
 - [[ADR-013-single-owner-for-the-api-contract]] — `API_CONTRACT.md`'s co-ownership gate (§4) is retired: the frontend/backend split ended and Adeen owns both sides. The "not agreed" banner covering 0.2.0/0.3.0 is removed, not backfilled as reviewed — the gate is gone because the role it depended on no longer exists, not because a second reading happened.
 - [[ADR-014-hosted-processing-exception-for-two-named-documents]] — Two real PTCL documents (`Azeem.jpeg`, `Azeem.pdf`) are uploaded as `data_classification: public` for a one-off hosted-profile test, under verbal authorization. Per-document exception only, not a category or a precedent — INV-6's guard, default-deny behaviour, and code are all unchanged.
+- [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] — A response cut off by `max_tokens` (measured 1340–3201 natural tokens on a dense document against a 2000 ceiling, ~45% failure rate) is detected via `finish_reason`, never retried through the repair-prompt loop, and salvaged field-by-field against `EXTRACTION_SCHEMA.json` — forced to `needs_review`, never promoted to `complete`, and only failed outright if nothing survives. Same fallible-check-must-not-be-authoritative reasoning as [[ADR-012-provenance-merge-was-dead-code]]. `hosted_llm_max_tokens` now a measured `Settings` default (4000), not a hardcoded literal.
 
 ## 9. Session protocol (for AI coding assistants)
 

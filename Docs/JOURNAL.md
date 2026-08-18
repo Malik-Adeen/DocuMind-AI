@@ -28,6 +28,70 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-18 — truncated LLM output is detected via finish_reason, salvaged instead of retried, and forced to needs_review (ADR-015)
+
+**Touched:** no INV directly (fallible-check discipline, same class as INV-2/ADR-012) ·
+`CodeBase/backend/app/pipeline/llm/transport.py` (+`TruncatedResponseError`, `max_tokens` default
+2000→4000), `CodeBase/backend/app/pipeline/orchestrator.py` (`_salvage_truncated_output`,
+`ExtractionOutcome.truncated`, forced `needs_review`, `document.error` in `run_and_persist`),
+`CodeBase/backend/app/core/config.py` (+`hosted_llm_max_tokens`), `CodeBase/backend/app/core/errors.py`
+(+`LLM_OUTPUT_TRUNCATED`), `CodeBase/backend/app/workers/tasks.py`, `CodeBase/backend/.env`/`.env.example`,
+`CodeBase/backend/pyproject.toml` (+`json-repair`), `CodeBase/backend/tests/unit/test_transport.py`,
+`CodeBase/backend/tests/unit/test_orchestrator.py`, `CodeBase/backend/tests/integration/test_worker_errors.py`,
+`CodeBase/frontend/documind-ai/src/components/screens/DocumentReview.jsx`,
+`Docs/decisions/ADR-015-truncated-llm-output-is-salvaged-not-repaired.md` (new), `Docs/ARCHITECTURE.md` §7,
+`Docs/API_CONTRACT.md` (0.3.7 → 0.3.8), `Docs/PROJECT_CONTEXT.md` §8, `Docs/INDEX.md`, branch
+`fix/llm-truncation-detection`, off `master`
+
+**Did:** Diagnosed before touching anything, per instruction. Traced the exact path: `HostedChatTransport
+.__call__` returned only `content`, discarding the response body `finish_reason` lived in — the same
+"discarded until `complete_full()` was built for the eval harness" pattern JOURNAL 2026-08-10 already
+named for `provider`/`id`, except production never adopted `complete_full()`. A truncated response's
+`json.JSONDecodeError` was indistinguishable from genuine malformation and triggered the same
+repair-prompt retry, which resends the original prompt plus the entire truncated output plus an error
+string — a *longer* request with the same odds of truncating again. Measured real hosted-LLM calls
+against a dense document (17 fields, 5 line items): 4 of 5 direct `complete_full()` calls returned
+`finish_reason: "length"` at exactly `completion_tokens: 2000`; natural (uncapped) completions ranged
+1340–3201 tokens across 13 real calls — the 2000 ceiling sat below the observed maximum, the direct
+cause of the ~45% failure rate. A 2329-token natural response correctly enumerated all 5 real line
+items; capped/truncated responses enumerated only 2 — the ceiling wasn't just failing outright, it was
+rewarding incomplete extractions that happened to fit.
+
+Fixed in three parts, all evidence-driven per instruction to diagnose before deciding: (1)
+`HostedChatTransport.__call__` now raises `TruncatedResponseError(content)` on `finish_reason ==
+"length"`, using the field that was already being computed and discarded — no new API call. (2)
+`orchestrator.py::extract()` catches it *around* `complete_with_repair()`, not inside it, so
+truncation never enters the repair-retry loop. (3) `_salvage_truncated_output()` runs `json_repair`
+(new dependency — a hand-rolled truncated-JSON/escaped-string parser was rejected as too risky for a
+reviewer-facing path) to close out whatever the model had actually finished, then re-validates every
+field/line-item entry individually against its own `$defs/field`/`$defs/money_field` schema fragment,
+dropping anything left with holes (missing `confidence`/`verified`/`source`) rather than keeping a
+guess. If nothing survives, it fails exactly as any other unrecoverable response does
+(`ExtractionFailedError`). If something survives, the extraction is **forced** to `needs_review` —
+never promoted to `complete` even if every recovered field happens to gate-verify — with
+`review.reason: "llm_output_truncated"` and `document.error` populated (`LLM_OUTPUT_TRUNCATED`), the
+first case where `/status.error` is non-null on a document that is not `failed`.
+`hosted_llm_max_tokens` is now a `Settings` field defaulted to 4000 (roughly 2x typical, headroom over
+every sample observed), externalized like the other hosted-LLM knobs rather than left as a dataclass
+literal — the whole point being that an unmeasured hardcoded number at this layer is what caused the
+problem. `DocumentReview.jsx` now fetches `GET .../status` after a successful `needs_review` load
+too (previously only on the `NOT_READY` fallback path) and renders `error.message` distinctly when
+`review.reason` is present.
+
+**Learned / broke:** The salvage is a second instance of exactly [[ADR-012-provenance-merge-was-dead-code]]'s
+pattern — a fallible recovery check that must never be authoritative — and ADR-015 says so explicitly
+rather than re-deriving the reasoning from scratch. Per-entry schema re-validation (not just "does
+`json_repair` return a dict") was necessary in practice, not paranoia: `json_repair` happily returns a
+field object with only `{"value": "..."}` when generation stops mid-object, missing the three other
+required keys — without dropping those, a "recovered" field could reach a reviewer with no
+`confidence`/`verified`/`source` at all, silently violating INV-2 the same way the pre-ADR-012 bug did.
+
+**Next:** `evals/run_eval.py` still does not exist (ADR-012's own open item, still open) — truncation
+rate and salvage-recovery rate belong there as a golden-set-level signal once it does, not just the
+per-request log line this ships with. If a document is ever observed naturally exceeding 4000 output
+tokens (not just hitting the old 2000 cap), the ceiling needs re-measuring against that evidence, not
+another instinct-driven bump.
+
 ## 2026-08-17 — `source.unmatched` surfaces fabricated provenance quotes to the API and UI (schema 0.3.1)
 
 **Touched:** INV-2 (extended, not reversed) · `CodeBase/backend/app/pipeline/provenance.py`,

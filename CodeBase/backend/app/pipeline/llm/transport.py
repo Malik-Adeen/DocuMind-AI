@@ -12,12 +12,24 @@ class HostedLLMError(RuntimeError):
     pass
 
 
+class TruncatedResponseError(RuntimeError):
+    """Raised when the hosted endpoint reports finish_reason == "length" — the model ran out of
+    max_tokens mid-generation. Distinct from HostedLLMError (a transport/protocol failure) and
+    from a plain malformed response: the content is real, just cut off, and callers may still be
+    able to salvage a usable partial extraction from it rather than treating it as garbage.
+    """
+
+    def __init__(self, content: str) -> None:
+        super().__init__("hosted LLM response was truncated by max_tokens (finish_reason=length)")
+        self.content = content
+
+
 @dataclass(frozen=True, slots=True)
 class HostedChatTransport:
     client: httpx.Client
     model: str
     temperature: float = 0.0
-    max_tokens: int = 2000
+    max_tokens: int = 4000
     seed: int | None = None
     provider_order: tuple[str, ...] | None = None
 
@@ -53,5 +65,8 @@ class HostedChatTransport:
         return content, body
 
     def __call__(self, prompt: str) -> str:
-        content, _ = self.complete_full(prompt)
+        content, body = self.complete_full(prompt)
+        choices = body.get("choices") or [{}]
+        if choices[0].get("finish_reason") == "length":
+            raise TruncatedResponseError(content)
         return content
