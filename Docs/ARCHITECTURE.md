@@ -2,7 +2,7 @@
 status: active
 owner: Adeen
 last_reviewed: 2026-08-17
-version: 1.3.1
+version: 1.4.0
 ---
 
 # ARCHITECTURE.md
@@ -93,10 +93,14 @@ FastAPI  ──────────►  PostgreSQL 16  (documents, extractio
       ▼                     │
 Redis ──► Celery worker ────┘
               │
-              ├─ Stage 1  PaddleOCR PP-OCRv5      → text + layout boxes
+              ├─ Stage 1a Deskew                  → level a skewed scan before OCR reads it;
+              │             exact no-op on an already-straight page
+              │             (app/pipeline/ocr/deskew.py)
+              ├─ Stage 1b PaddleOCR PP-OCRv5      → text + layout boxes
               │             app/pipeline/ocr/paddle.py — model load is lazy
               │             and injectable; regions carry normalised 0..1
-              │             bboxes + per-region confidence (INV-2)
+              │             bboxes + per-region confidence (INV-2), remapped
+              │             back onto the pre-deskew image (Stage 1a)
               ├─ Stage 2  Qaari-0.1-Urdu          → Urdu regions only
               ├─ Stage 3  text assembly + cleanup
               ├─ Stage 4  Qwen2.5-7B-Instruct     → JSON per EXTRACTION_SCHEMA
@@ -227,7 +231,8 @@ field is Latin-stage provenance carrying Urdu-stage text. Verified against the m
 dropped text at region boundaries. That merge is a known sharp edge — it needs its own unit tests
 with overlapping-box fixtures.
 
-**Stage 1 is `app/pipeline/ocr/paddle.py`.** It wraps PP-OCRv5 and nothing else: it returns
+**Stage 1b is `app/pipeline/ocr/paddle.py`.** It wraps PP-OCRv5 and orchestrates one preprocessing
+call ahead of it (Stage 1a) but contains no OCR-adjacent logic beyond that: it returns
 `TextRegion`s carrying text, per-region confidence, and a bbox normalised to 0..1 in the shape of
 the `source` object in [[EXTRACTION_SCHEMA.json]]. **There is no merge logic in it** — Qaari and the
 merge are separate stages, and putting either inside the Latin reader is what makes a merge bug
@@ -235,6 +240,44 @@ untestable. Model loading is lazy and the loader is injectable, so the unit test
 model nor a GPU; a mismatch between the engine's texts, scores and polygons raises rather than
 truncating, because a silently dropped region is a field that reaches the reviewer with no
 provenance (INV-2).
+
+**Stage 1a is `app/pipeline/ocr/deskew.py` — its own module, not inlined into paddle.py, for the
+same reason the Qaari merge is its own module and not inlined into the Latin reader.** Skew
+detection has real, independently wrong-able logic (an angle estimate, a no-op threshold, an
+inverse coordinate transform) that needs unit tests with synthetic images and no OCR engine or GPU
+involved, exactly the argument two paragraphs up already makes for keeping merge logic out of
+`paddle.py`. It exposes three small pure functions — `estimate_skew_degrees`, `rotate_image`,
+`map_bbox_to_original` — and `PaddleLatinOCR.read()` is the only caller, in that order: estimate
+the angle on whichever file OCR is about to read (the original upload, or the freshly rasterized
+PDF page); if the estimate is non-zero, rotate into a **new** temporary file — `read()` never writes
+to the file it was handed, raw uploads are immutable (INV-3) regardless of whether that file came
+from a PDF rasterization or is the upload itself; run PP-OCRv5 against whichever file that leaves it
+with; then map every returned bbox back through the same angle before constructing `TextRegion`s.
+
+**Bboxes must come back in the original image's coordinate space, not the deskewed one, because
+`GET .../file` (API_CONTRACT §10) serves the raw upload byte-for-byte and never the corrected
+version** — INV-3 again, and there is no second, corrected artifact stored anywhere to serve instead.
+Left unconverted, a bbox read off a rotated image would highlight the wrong spot on the unrotated
+photo the frontend actually displays — offset worst on exactly the skewed scans this stage exists to
+help. `map_bbox_to_original` corrects for it: the same rotation `rotate_image` applied, inverted,
+applied to a bbox's four corners, then the axis-aligned box around those four mapped points —
+looser than the true rotated quadrilateral (`EXTRACTION_SCHEMA.json`'s bbox is axis-aligned only),
+negligibly so at the small angles this stage ever corrects.
+
+**A no-op on an already-straight page by construction, not by luck.** `estimate_skew_degrees`
+returns exactly `0.0` — never a near-zero float — unless the median angle across enough long,
+near-horizontal edges clears a 0.1° floor (below that is measurement noise, not skew) and stays
+under a 15° ceiling (above that is an untrustworthy estimate, not a real page rotation — PaddleOCR's
+own disabled `use_doc_orientation_classify`/`use_textline_orientation` are the tool for gross 0/90/
+180/270 orientation, a different problem this stage does not attempt). `rotate_image(image, 0.0)`
+returns the same object: no resample, no re-encode, no BICUBIC interpolation pass that could ever
+degrade a page that never needed correcting. `map_bbox_to_original(bbox, 0.0, …)` returns `bbox`
+unchanged. This stage corrects in-plane rotation only — a genuinely keystoned phone photo (the page
+not shot perpendicular to the camera) is a perspective distortion no single rotation angle can fix;
+out of scope here, and not what "deskew" was asked to mean.
+
+**Cost:** one Canny + probabilistic-Hough pass per page, milliseconds on a CPU, paid even when the
+result is "already straight" — the estimate has to run to know that.
 
 ---
 
