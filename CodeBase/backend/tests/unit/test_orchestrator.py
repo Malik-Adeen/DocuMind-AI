@@ -247,7 +247,7 @@ def test_money_field_with_no_gate_coverage_is_refused() -> None:
     llm, _spy = hosted_llm(llm_body(fields))
 
     with pytest.raises(GateCoverageError, match="subtotal"):
-        extract(document(), ocr=FakeOCR(regions()), llm=llm)
+        extract(document(), ocr=FakeOCR(regions()), llm=llm, gates=())
 
 
 def test_pipeline_version_is_stamped_with_profile_model_and_prompt_hash() -> None:

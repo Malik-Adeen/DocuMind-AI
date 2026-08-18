@@ -67,12 +67,12 @@ def _line_items(extraction: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [item for item in items if isinstance(item, Mapping)]
 
 
-def _malformed(gate: str, bad: _MalformedAmountError) -> GateResult:
+def _malformed(gate: str, field: str, raw: str) -> GateResult:
     return GateResult(
         name=gate,
         state=GateState.FAILED,
-        detail=f"{bad.field} is not a valid decimal amount: {bad.raw!r}",
-        affected_fields=(bad.field,),
+        detail=f"{field} is not a valid decimal amount: {raw!r}",
+        affected_fields=(field,),
     )
 
 
@@ -85,44 +85,81 @@ def _absent(gate: str, missing: tuple[str, ...], what: str) -> GateResult:
     )
 
 
-def _check_line_items(extraction: Mapping[str, Any]) -> GateResult:
+def _parse_money_fields(
+    container: Mapping[str, Any], names: Sequence[str], *, gate: str
+) -> tuple[dict[str, Decimal], list[GateResult]]:
+    clean: dict[str, Decimal] = {}
+    malformed: list[GateResult] = []
+    for name in names:
+        try:
+            value = _money(container, name)
+        except _MalformedAmountError as bad:
+            malformed.append(_malformed(gate, bad.field, bad.raw))
+            continue
+        if value is not None:
+            clean[name] = value
+    return clean, malformed
+
+
+def _parse_line_item_fields(
+    item: Mapping[str, Any], index: int
+) -> tuple[dict[str, Decimal], list[GateResult]]:
+    clean: dict[str, Decimal] = {}
+    malformed: list[GateResult] = []
+    for name, parser in (("line_total", _money), ("unit_price", _money), ("quantity", _quantity)):
+        try:
+            value = parser(item, name)
+        except _MalformedAmountError as bad:
+            malformed.append(
+                _malformed(LINE_ITEM_GATE, f"line_items[{index}].{bad.field}", bad.raw)
+            )
+            continue
+        if value is not None:
+            clean[name] = value
+    return clean, malformed
+
+
+def _check_line_items(extraction: Mapping[str, Any]) -> tuple[GateResult, ...]:
     fields = _fields(extraction)
     items = _line_items(extraction)
 
-    try:
-        subtotal = _money(fields, "subtotal")
-    except _MalformedAmountError as bad:
-        return _malformed(LINE_ITEM_GATE, bad)
+    subtotal_clean, subtotal_malformed = _parse_money_fields(
+        fields, ("subtotal",), gate=LINE_ITEM_GATE
+    )
+    subtotal = subtotal_clean.get("subtotal")
+    results: list[GateResult] = list(subtotal_malformed)
 
     if not items:
-        return _absent(LINE_ITEM_GATE, ("line_items",), "line item sum")
-    if subtotal is None:
-        return _absent(LINE_ITEM_GATE, ("subtotal",), "line item sum")
+        results.append(_absent(LINE_ITEM_GATE, ("line_items",), "line item sum"))
+        return tuple(results)
+
+    sum_computable = subtotal is not None
+    not_computable: list[str] = []
+    if subtotal is None and not subtotal_malformed:
+        not_computable.append("subtotal")
 
     totals: list[Decimal] = []
     product_errors: list[str] = []
     affected: list[str] = []
 
     for index, item in enumerate(items):
-        try:
-            line_total = _money(item, "line_total")
-            unit_price = _money(item, "unit_price")
-            quantity = _quantity(item, "quantity")
-        except _MalformedAmountError as bad:
-            return GateResult(
-                name=LINE_ITEM_GATE,
-                state=GateState.FAILED,
-                detail=(
-                    f"line_items[{index}].{bad.field} is not a valid decimal amount: {bad.raw!r}"
-                ),
-                affected_fields=(f"line_items[{index}].{bad.field}",),
-            )
+        item_clean, item_malformed = _parse_line_item_fields(item, index)
+        item_malformed_names = {
+            result.affected_fields[0].rsplit(".", 1)[-1] for result in item_malformed
+        }
+        results.extend(item_malformed)
 
+        line_total = item_clean.get("line_total")
         if line_total is None:
-            return _absent(LINE_ITEM_GATE, (f"line_items[{index}].line_total",), "line item sum")
+            sum_computable = False
+            if "line_total" not in item_malformed_names:
+                not_computable.append(f"line_items[{index}].line_total")
+            continue
 
         totals.append(line_total)
 
+        unit_price = item_clean.get("unit_price")
+        quantity = item_clean.get("quantity")
         if unit_price is not None and quantity is not None:
             expected = unit_price * quantity
             if expected != line_total:
@@ -138,6 +175,11 @@ def _check_line_items(extraction: Mapping[str, Any]) -> GateResult:
                     )
                 )
 
+    if not sum_computable:
+        results.append(_absent(LINE_ITEM_GATE, tuple(not_computable), "line item sum"))
+        return tuple(results)
+
+    assert subtotal is not None
     summed = sum(totals, _ZERO)
     sum_matches = summed == subtotal
 
@@ -147,87 +189,114 @@ def _check_line_items(extraction: Mapping[str, Any]) -> GateResult:
             details.append(f"line items sum to {summed}, subtotal is {subtotal}")
             affected.extend(f"line_items[{i}].line_total" for i in range(len(items)))
             affected.append("subtotal")
-        return GateResult(
-            name=LINE_ITEM_GATE,
-            state=GateState.FAILED,
-            detail="; ".join(details),
-            affected_fields=tuple(dict.fromkeys(affected)),
+        results.append(
+            GateResult(
+                name=LINE_ITEM_GATE,
+                state=GateState.FAILED,
+                detail="; ".join(details),
+                affected_fields=tuple(dict.fromkeys(affected)),
+            )
         )
+        return tuple(results)
 
-    return GateResult(
-        name=LINE_ITEM_GATE,
-        state=GateState.PASSED,
-        detail=f"{len(items)} line items sum to subtotal {subtotal}",
-        affected_fields=("subtotal",),
+    results.append(
+        GateResult(
+            name=LINE_ITEM_GATE,
+            state=GateState.PASSED,
+            detail=f"{len(items)} line items sum to subtotal {subtotal}",
+            affected_fields=("subtotal",),
+        )
     )
+    return tuple(results)
 
 
-def _check_totals(extraction: Mapping[str, Any]) -> GateResult:
+def _check_totals(extraction: Mapping[str, Any]) -> tuple[GateResult, ...]:
     fields = _fields(extraction)
+    clean, malformed = _parse_money_fields(fields, ("subtotal", "tax", "total"), gate=TOTALS_GATE)
+    results: list[GateResult] = list(malformed)
 
-    try:
-        subtotal = _money(fields, "subtotal")
-        tax = _money(fields, "tax")
-        total = _money(fields, "total")
-    except _MalformedAmountError as bad:
-        return _malformed(TOTALS_GATE, bad)
-
+    malformed_names = {result.affected_fields[0] for result in malformed}
     missing = tuple(
         name
-        for name, value in (("subtotal", subtotal), ("tax", tax), ("total", total))
-        if value is None
+        for name in ("subtotal", "tax", "total")
+        if name not in clean and name not in malformed_names
     )
-    if missing:
-        return _absent(TOTALS_GATE, missing, "subtotal + tax = total")
 
-    assert subtotal is not None and tax is not None and total is not None
+    if missing or malformed_names:
+        still_needs_verdict = tuple(
+            name for name in ("subtotal", "tax", "total") if name not in malformed_names
+        )
+        if still_needs_verdict:
+            reasons = []
+            if missing:
+                reasons.append(f"{', '.join(missing)} absent")
+            if malformed_names:
+                reasons.append(f"{', '.join(sorted(malformed_names))} malformed")
+            results.append(
+                GateResult(
+                    name=TOTALS_GATE,
+                    state=GateState.FORMAT_ONLY,
+                    detail=(f"subtotal + tax = total not computable: {'; '.join(reasons)}"),
+                    affected_fields=still_needs_verdict,
+                )
+            )
+        return tuple(results)
+
+    subtotal, tax, total = clean["subtotal"], clean["tax"], clean["total"]
     computed = subtotal + tax
 
     if computed != total:
-        return GateResult(
+        results.append(
+            GateResult(
+                name=TOTALS_GATE,
+                state=GateState.FAILED,
+                detail=f"subtotal {subtotal} + tax {tax} = {computed}, total is {total}",
+                affected_fields=("subtotal", "tax", "total"),
+            )
+        )
+        return tuple(results)
+
+    results.append(
+        GateResult(
             name=TOTALS_GATE,
-            state=GateState.FAILED,
-            detail=f"subtotal {subtotal} + tax {tax} = {computed}, total is {total}",
+            state=GateState.PASSED,
+            detail=f"subtotal {subtotal} + tax {tax} = total {total}",
             affected_fields=("subtotal", "tax", "total"),
         )
-
-    return GateResult(
-        name=TOTALS_GATE,
-        state=GateState.PASSED,
-        detail=f"subtotal {subtotal} + tax {tax} = total {total}",
-        affected_fields=("subtotal", "tax", "total"),
     )
+    return tuple(results)
 
 
-def _check_mrc_otc(extraction: Mapping[str, Any]) -> GateResult:
+def _check_mrc_otc(extraction: Mapping[str, Any]) -> tuple[GateResult, ...]:
     fields = _fields(extraction)
+    clean, malformed = _parse_money_fields(fields, ("mrc", "otc"), gate=TOTALS_GATE)
+    results: list[GateResult] = list(malformed)
 
-    try:
-        mrc = _money(fields, "mrc")
-        otc = _money(fields, "otc")
-    except _MalformedAmountError as bad:
-        return _malformed(TOTALS_GATE, bad)
-
-    present = tuple(name for name, value in (("mrc", mrc), ("otc", otc)) if value is not None)
+    present = tuple(name for name in ("mrc", "otc") if name in clean)
     if not present:
-        return _absent(TOTALS_GATE, ("mrc", "otc"), "mrc/otc reconciliation")
+        if not malformed:
+            results.append(_absent(TOTALS_GATE, ("mrc", "otc"), "mrc/otc reconciliation"))
+        return tuple(results)
 
-    return GateResult(
-        name=TOTALS_GATE,
-        state=GateState.FORMAT_ONLY,
-        detail=(
-            "mrc/otc to total relationship is undetermined: no specified rule exists to "
-            "check them against subtotal or total, and no arithmetic identity holds in "
-            "general — an invoice may bill otc plus one month of mrc, a contract may state "
-            "mrc with no total, and multi-month billing satisfies neither. See ADR-005"
-        ),
-        affected_fields=present,
+    results.append(
+        GateResult(
+            name=TOTALS_GATE,
+            state=GateState.FORMAT_ONLY,
+            detail=(
+                "mrc/otc to total relationship is undetermined: no specified rule exists to "
+                "check them against subtotal or total, and no arithmetic identity holds in "
+                "general — an invoice may bill otc plus one month of mrc, a contract may state "
+                "mrc with no total, and multi-month billing satisfies neither. See ADR-005"
+            ),
+            affected_fields=present,
+        )
     )
+    return tuple(results)
 
 
 def check_arithmetic(extraction: Mapping[str, Any]) -> tuple[GateResult, ...]:
     return (
-        _check_line_items(extraction),
-        _check_totals(extraction),
-        _check_mrc_otc(extraction),
+        *_check_line_items(extraction),
+        *_check_totals(extraction),
+        *_check_mrc_otc(extraction),
     )
