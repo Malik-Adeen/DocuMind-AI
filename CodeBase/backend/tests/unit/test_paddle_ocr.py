@@ -17,6 +17,24 @@ from app.pipeline.ocr.paddle import (
 PAGE = (1000, 500)
 
 
+def make_ruled_png(
+    path: Path, *, angle_degrees: float = 0.0, size: tuple[int, int] = (800, 600)
+) -> Path:
+    from PIL import Image, ImageDraw
+
+    width, height = size
+    image = Image.new("RGB", size, "white")
+    draw = ImageDraw.Draw(image)
+    for y in range(80, height - 80, 60):
+        draw.line([(60, y), (width - 60, y)], fill="black", width=3)
+    for x in range(120, width - 120, 140):
+        draw.line([(x, 60), (x, height - 60)], fill="black", width=2)
+    if angle_degrees:
+        image = image.rotate(angle_degrees, resample=Image.Resampling.BICUBIC, fillcolor="white")
+    image.save(path)
+    return path
+
+
 def make_pdf(path: Path, page_sizes: Sequence[tuple[float, float]]) -> Path:
     import pypdfium2 as pdfium
 
@@ -249,3 +267,63 @@ def test_regions_are_immutable() -> None:
     region = TextRegion(text="x", confidence=0.5, bbox=(0.0, 0.0, 1.0, 1.0))
     with pytest.raises(dataclasses.FrozenInstanceError):
         region.confidence = 0.9  # type: ignore[misc]
+
+
+def test_a_straight_page_is_read_from_the_original_file_no_temp_copy(tmp_path: Path) -> None:
+    scan_path = make_ruled_png(tmp_path / "scan.png", angle_degrees=0.0)
+    ocr, loader = reader(result())
+
+    ocr.read(scan_path)
+
+    assert loader.engine.calls == [str(scan_path)]
+
+
+def test_a_skewed_page_is_read_from_a_temporary_deskewed_copy_that_gets_cleaned_up(
+    tmp_path: Path,
+) -> None:
+    scan_path = make_ruled_png(tmp_path / "scan.png", angle_degrees=3.0)
+    ocr, loader = reader(result())
+
+    ocr.read(scan_path)
+
+    called_path = loader.engine.calls[0]
+    assert called_path != str(scan_path)
+    assert called_path.endswith(".png")
+    assert not Path(called_path).exists()
+
+
+def test_the_original_upload_is_never_mutated_when_deskew_fires_inv_3(tmp_path: Path) -> None:
+    scan_path = make_ruled_png(tmp_path / "scan.png", angle_degrees=3.0)
+    before = scan_path.read_bytes()
+    ocr, _ = reader(result())
+
+    ocr.read(scan_path)
+
+    assert scan_path.read_bytes() == before
+
+
+def test_bboxes_on_a_skewed_page_are_remapped_back_onto_the_original_image(tmp_path: Path) -> None:
+    from app.pipeline.ocr.deskew import estimate_skew_degrees, map_bbox_to_original
+
+    size = (800, 600)
+    scan_path = make_ruled_png(tmp_path / "scan.png", angle_degrees=3.0, size=size)
+    ocr, _ = reader(
+        result(
+            rec_texts=["mid-page"],
+            rec_scores=[0.9],
+            rec_polys=[[[300, 250], [500, 250], [500, 300], [300, 300]]],
+        )
+    )
+
+    regions = ocr.read(scan_path)
+
+    from PIL import Image
+
+    with Image.open(scan_path) as opened:
+        angle = estimate_skew_degrees(opened)
+    assert angle != 0.0, "fixture must actually trigger correction for this test to mean anything"
+
+    naive_bbox = (300 / size[0], 250 / size[1], 500 / size[0], 300 / size[1])
+    expected_bbox = map_bbox_to_original(naive_bbox, angle, *size)
+    assert regions[0].bbox == expected_bbox
+    assert regions[0].bbox != naive_bbox

@@ -118,13 +118,6 @@ def _regions(
     ]
 
 
-def image_size(image_path: Path) -> tuple[int, int]:
-    from PIL import Image
-
-    with Image.open(image_path) as image:
-        return image.width, image.height
-
-
 def _rasterize_pdf_page(pdf_path: Path, page: int, dpi: int = PDF_RASTER_DPI) -> Path:
     import pypdfium2 as pdfium
 
@@ -142,6 +135,13 @@ def _rasterize_pdf_page(pdf_path: Path, page: int, dpi: int = PDF_RASTER_DPI) ->
     os.close(fd)
     image.save(raster_path)
     return Path(raster_path)
+
+
+def _save_temp_png(image: Any) -> Path:
+    fd, deskew_path = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    image.save(deskew_path)
+    return Path(deskew_path)
 
 
 @dataclass(slots=True)
@@ -164,18 +164,49 @@ class PaddleLatinOCR:
     ) -> list[TextRegion]:
         path = Path(image_path)
         raster_path: Path | None = None
+        deskew_path: Path | None = None
         if path.suffix.lower() == ".pdf":
             raster_path = _rasterize_pdf_page(path, page)
         engine_path = raster_path if raster_path is not None else path
         try:
-            width, height = size if size is not None else image_size(engine_path)
+            angle = 0.0
+            if size is not None:
+                width, height = size
+            else:
+                from PIL import Image
+
+                from app.pipeline.ocr.deskew import estimate_skew_degrees, rotate_image
+
+                with Image.open(engine_path) as opened:
+                    width, height = opened.width, opened.height
+                    if width > 0 and height > 0:
+                        angle = estimate_skew_degrees(opened)
+                        if angle != 0.0:
+                            deskew_path = _save_temp_png(rotate_image(opened, angle))
+
             if width <= 0 or height <= 0:
                 raise OCREngineError(f"image {path} reports a {width}x{height} page")
 
+            predict_path = deskew_path if deskew_path is not None else engine_path
             regions: list[TextRegion] = []
-            for result in self.engine.predict(str(engine_path)):
+            for result in self.engine.predict(str(predict_path)):
                 regions.extend(_regions(result, width, height, page))
+
+            if angle != 0.0:
+                from app.pipeline.ocr.deskew import map_bbox_to_original
+
+                regions = [
+                    TextRegion(
+                        text=region.text,
+                        confidence=region.confidence,
+                        bbox=map_bbox_to_original(region.bbox, angle, width, height),
+                        page=region.page,
+                    )
+                    for region in regions
+                ]
             return regions
         finally:
             if raster_path is not None:
                 raster_path.unlink(missing_ok=True)
+            if deskew_path is not None:
+                deskew_path.unlink(missing_ok=True)
