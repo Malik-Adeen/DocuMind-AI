@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-17
-version: 1.4.0
+last_reviewed: 2026-08-18
+version: 1.5.1
 ---
 
 # ARCHITECTURE.md
@@ -423,7 +423,8 @@ new migration.
 | Failure | Behaviour |
 |---|---|
 | OCR returns near-empty text | fail fast, `OCR_FAILED`, retryable. Do not send empty text to the LLM. |
-| LLM emits invalid JSON | retry once with a repair prompt; then `EXTRACTION_FAILED`. Never regex-patch the JSON. |
+| LLM emits invalid JSON, not truncated (`finish_reason` is not `"length"`) | retry once with a repair prompt; then `EXTRACTION_FAILED`. **Still never regex-patch the JSON** — this row's rule is unreversed; see the next row for the one narrow exception. |
+| LLM response is truncated (`finish_reason: "length"`) | **Not retried via the repair prompt** — resending the original prompt plus a ~4000-token bad output is a longer request with the same odds of truncating again. Instead: syntactically close out whatever JSON the model had actually finished, keep only the field/line-item entries that individually validate against `EXTRACTION_SCHEMA.json`, drop anything mid-flight. If something survives: `needs_review`, `review.reason: "llm_output_truncated"`, `/status.error` populated (`LLM_OUTPUT_TRUNCATED`) even though the document is not `failed` — the one case where `error` is non-null on a non-`failed` document. If nothing survives: `EXTRACTION_FAILED`, same as any other unrecoverable response. **This row is a deliberate, narrow reversal of the row above's "never regex-patch the JSON"** — the recovery step genuinely is a patch-and-close-out operation, not something else wearing a different name. What makes it safe here and nowhere else: every recovered entry is independently re-validated against the same schema a complete response has to pass, and anything that fails that check is dropped rather than trusted. See [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] for the full reasoning and what it explicitly reverses. |
 | LLM omits a required field | field is `null`, `confidence: 0` — not a crash. |
 | Gate fails | `needs_review`, affected fields `verified: false`. |
 | Gate returns `format_only` | Not a failure. Field stays `verified: false` and reaches the reviewer as unconfirmed. CNIC/NTN/STRN always land here (§5). |

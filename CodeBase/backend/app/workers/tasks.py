@@ -44,7 +44,9 @@ def _default_llm_client() -> LLMClient:
         headers={"Authorization": f"Bearer {settings.hosted_llm_api_key}"},
         timeout=60.0,
     )
-    transport = HostedChatTransport(client=client, model=settings.hosted_llm_model)
+    transport = HostedChatTransport(
+        client=client, model=settings.hosted_llm_model, max_tokens=settings.hosted_llm_max_tokens
+    )
     return LLMClient(
         profile=DeploymentProfile.PROTOTYPE,
         endpoint=Endpoint.HOSTED,

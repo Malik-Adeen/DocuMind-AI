@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.pipeline.llm.transport import HostedChatTransport, HostedLLMError
+from app.pipeline.llm.transport import HostedChatTransport, HostedLLMError, TruncatedResponseError
 
 MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
@@ -46,7 +46,7 @@ def test_posts_prompt_as_chat_completion_and_returns_content() -> None:
     assert captured["body"]["messages"] == [{"role": "user", "content": "extract this"}]
 
 
-def test_caps_max_tokens_at_2000_by_default() -> None:
+def test_caps_max_tokens_at_4000_by_default() -> None:
     captured: dict[str, Any] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -55,7 +55,7 @@ def test_caps_max_tokens_at_2000_by_default() -> None:
 
     HostedChatTransport(client=client_with(handler), model=MODEL)("x")
 
-    assert captured["body"]["max_tokens"] == 2000
+    assert captured["body"]["max_tokens"] == 4000
 
 
 def test_max_tokens_is_configurable() -> None:
@@ -100,6 +100,59 @@ def test_raises_hosted_llm_error_on_unexpected_response_shape() -> None:
 
     with pytest.raises(HostedLLMError):
         transport("extract this")
+
+
+def test_finish_reason_length_raises_truncated_response_error_with_the_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-2",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"fields": {"po_num'},
+                        "finish_reason": "length",
+                    }
+                ],
+            },
+        )
+
+    transport = HostedChatTransport(client=client_with(handler), model=MODEL)
+
+    with pytest.raises(TruncatedResponseError) as excinfo:
+        transport("extract this")
+    assert excinfo.value.content == '{"fields": {"po_num'
+
+
+def test_finish_reason_stop_does_not_raise_truncated() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-3",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "{}"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    transport = HostedChatTransport(client=client_with(handler), model=MODEL)
+
+    assert transport("extract this") == "{}"
+
+
+def test_missing_finish_reason_does_not_raise_truncated() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return completion_response("{}")
+
+    transport = HostedChatTransport(client=client_with(handler), model=MODEL)
+
+    assert transport("extract this") == "{}"
 
 
 def test_transport_is_usable_as_an_llmclient_transport_callable() -> None:

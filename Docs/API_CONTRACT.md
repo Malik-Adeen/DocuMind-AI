@@ -1,13 +1,13 @@
 ---
 status: draft
 owner: Adeen
-last_reviewed: 2026-08-17
-version: 0.3.7
+last_reviewed: 2026-08-18
+version: 0.3.8
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.7 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.3.8 · **Status:** Draft — freeze before frontend work starts
 **Owner:** Adeen, backend and frontend both. Single owner as of
 [[decisions/ADR-013-single-owner-for-the-api-contract]] (2026-08-14) — previously co-owned with a
 separate frontend developer; see that ADR for what changed. Changes still land with the version
@@ -146,11 +146,11 @@ GET /api/v1/documents/{id}/status
 
 Poll interval: 2 s while not terminal. Terminal states: `complete`, `needs_review`, `failed`.
 
-### `error` is populated for two failure causes (new in 0.3.5)
+### `error` is populated for three causes — two on `failed`, one on `needs_review` (new in 0.3.5, extended 0.3.8)
 
-`error` is `null` unless `status` is `failed`, and even then it is only populated for the two causes
-below — everything else that can fail extraction still reports `null`. When present, it is the same
-shape as an error envelope's inner object (§8), minus the HTTP status code:
+`error` is `null` except for the three causes below — everything else that can fail extraction still
+reports `null`. When present, it is the same shape as an error envelope's inner object (§8), minus
+the HTTP status code:
 
 ```json
 "error": {
@@ -161,15 +161,25 @@ shape as an error envelope's inner object (§8), minus the HTTP status code:
 }
 ```
 
-| Cause | `code` | `retryable` |
-|---|---|---|
-| INV-6 guard refused a hosted call ([[ARCHITECTURE]] §1, `HostedEndpointRefusedError`) | `HOSTED_ENDPOINT_REFUSED` | `false` — the document's classification is immutable, so retrying reprocesses into the same refusal |
-| Any other unclassified exception | `INTERNAL` | `true` |
+| Cause | `code` | `status` | `retryable` |
+|---|---|---|---|
+| INV-6 guard refused a hosted call ([[ARCHITECTURE]] §1, `HostedEndpointRefusedError`) | `HOSTED_ENDPOINT_REFUSED` | `failed` | `false` — the document's classification is immutable, so retrying reprocesses into the same refusal |
+| Any other unclassified exception | `INTERNAL` | `failed` | `true` |
+| LLM response truncated by `max_tokens`, and a usable partial extraction survived recovery ([[ARCHITECTURE]] §7, [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]]) | `LLM_OUTPUT_TRUNCATED` | **`needs_review`** | `true` — reprocessing has a real chance of not truncating; the model's output length is not fixed run to run |
 
-**Still `null`:** OCR failure, LLM schema-validation failure after repair, and gate-coverage failure
-(`OrchestratorError` and its subclasses) — their cause reaches the server log with a `stage`, but not
-yet the API. This is a narrower version of the gap this section used to describe in full; see
-[[PROJECT_CONTEXT]] §7's "Known gaps" for the current boundary.
+**`LLM_OUTPUT_TRUNCATED` is the one case where `error` is non-null on a document that is not
+`failed`.** A truncated response is not treated as a failure — see §4's `review.reason` for the
+same signal on the extraction result itself; this field carries the fuller, human-readable message.
+If nothing recoverable survived the truncation, the document *is* `failed` and reports
+`EXTRACTION_FAILED` instead (that case is not distinguished from any other unrecoverable LLM output
+— see below).
+
+**Still `null`:** OCR failure, LLM schema-validation failure after repair (including a truncated
+response with nothing recoverable — both report `EXTRACTION_FAILED` server-side with no further
+detail yet), and gate-coverage failure (`OrchestratorError` and its subclasses) — their cause
+reaches the server log with a `stage`, but not yet the API. This is a narrower version of the gap
+this section used to describe in full; see [[PROJECT_CONTEXT]] §7's "Known gaps" for the current
+boundary.
 
 **`message` never contains document content, by construction, not by filtering.**
 `HOSTED_ENDPOINT_REFUSED`'s message is `HostedEndpointRefusedError`'s own text, which
@@ -177,8 +187,9 @@ yet the API. This is a narrower version of the gap this section used to describe
 classification label only. `INTERNAL`'s message is a fixed string naming only `trace_id` — the
 triggering exception's own text is logged server-side and never placed in the API response, because
 an arbitrary unclassified exception is exactly the case where "what does this string contain" cannot
-be answered in advance. **Frontend: render `message` as-is; do not attempt to extract more detail from
-it than is there.**
+be answered in advance. `LLM_OUTPUT_TRUNCATED`'s message is a fixed, generic sentence — never the
+recovered field values or the raw truncated output. **Frontend: render `message` as-is; do not
+attempt to extract more detail from it than is there.**
 
 ---
 
@@ -254,6 +265,30 @@ the two the same hides exactly the failure this flag exists to surface.
 `gate_error` are — a model that outputs this key on its own has it discarded and recomputed, never
 trusted as-is. It never implies a fabricated `page`/`bbox`: a field with `unmatched: true` never
 also carries `page`/`bbox`, since those are set only on a successful match.
+
+### `review.reason` is populated for one cause: `llm_output_truncated` (new in 0.3.8)
+
+`review.reason` was declared in `EXTRACTION_SCHEMA.json` from early on (`examples:
+["gate_failed:arithmetic_reconciliation", "low_confidence:mrc"]`) but nothing ever set it — every
+`needs_review` document reported `review: {"required": true}` with no reason, the generic heuristic
+(some populated field isn't `verified`) being true of nearly every real extraction and therefore not
+worth naming. The first thing that *does* warrant a named reason: the extraction result came from
+recovering a response the LLM never finished writing.
+
+```json
+"review": { "required": true, "reason": "llm_output_truncated" }
+```
+
+Set exactly once, when the LLM's response was cut off by `max_tokens` and enough of it survived
+schema-validated recovery to be worth showing a reviewer — see [[ARCHITECTURE]] §7 and
+[[ADR-015-truncated-llm-output-is-salvaged-not-repaired]]. **This forces `needs_review` regardless
+of what the ordinary heuristic would have computed** — a salvaged response is never promoted to
+`complete` on its own, even if every recovered field happens to gate-verify.
+
+**Frontend: `review.reason` is a short machine-oriented label, not the message to show a reviewer.**
+For `llm_output_truncated`, fetch `GET .../status` and render `error.message` (§3) instead — the
+fuller, human-readable sentence lives there, using the same envelope shape every other structured
+error in this API uses.
 
 ### `pipeline_version.profile` (new in 0.3.0)
 
@@ -398,13 +433,17 @@ on `filename`.
 | `EXTRACTION_FAILED` | 422 | yes |
 | `DOCUMENTS_NOT_EXPORTABLE` | 422 | no |
 | `HOSTED_ENDPOINT_REFUSED` | 422 | no |
+| `LLM_OUTPUT_TRUNCATED` | 422 | yes |
 | `RATE_LIMITED` | 429 | yes |
 | `INTERNAL` | 500 | yes |
 
-**`HOSTED_ENDPOINT_REFUSED` never arrives as an HTTP error response.** Every other code in this table
-is returned synchronously, on the request that triggered it. This one only ever appears inside a
-terminal `GET .../status`'s `error` field (§3), because the refusal happens inside the async
-extraction task, after the upload request that started it has already returned `202`.
+**`HOSTED_ENDPOINT_REFUSED` and `LLM_OUTPUT_TRUNCATED` never arrive as an HTTP error response.**
+Every other code in this table is returned synchronously, on the request that triggered it. These
+two only ever appear inside a terminal `GET .../status`'s `error` field (§3), because both happen
+inside the async extraction task, after the upload request that started it has already returned
+`202`. They differ in one respect: every other cause in this table (including
+`HOSTED_ENDPOINT_REFUSED`) implies `status: "failed"`; `LLM_OUTPUT_TRUNCATED` implies
+`status: "needs_review"` — see §3's note on the one exception.
 
 ---
 

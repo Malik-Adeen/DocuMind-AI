@@ -9,9 +9,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Protocol
 
+import json_repair
 from jsonschema import Draft202012Validator, ValidationError
 from sqlalchemy.orm import Session
 
+from app.core.errors import envelope
 from app.db.documents import DocumentRecord
 from app.db.models import Document, Extraction
 from app.pipeline.gates.arithmetic import check_arithmetic
@@ -20,6 +22,7 @@ from app.pipeline.gates.iban import check_iban
 from app.pipeline.llm.client import LLMClient
 from app.pipeline.llm.prompt_builder import build_prompt
 from app.pipeline.llm.repair import RepairExhaustedError, complete_with_repair
+from app.pipeline.llm.transport import TruncatedResponseError
 from app.pipeline.ocr.paddle import ENGINE_VERSION, TextRegion
 from app.pipeline.provenance import ProvenanceReport, attach_provenance
 from app.schemas.extraction import extraction_schema, model_output_schema, schema_version
@@ -77,11 +80,32 @@ def _money_field_names() -> frozenset[str]:
     )
 
 
+LINE_ITEM_MONEY_FIELDS = frozenset({"unit_price", "line_total"})
+
+
+@lru_cache
+def _field_entry_validator() -> Draft202012Validator:
+    schema = extraction_schema()
+    return Draft202012Validator({"$ref": "#/$defs/field", "$defs": schema["$defs"]})
+
+
+@lru_cache
+def _money_field_entry_validator() -> Draft202012Validator:
+    schema = extraction_schema()
+    return Draft202012Validator({"$ref": "#/$defs/money_field", "$defs": schema["$defs"]})
+
+
+def _entry_validator(name: str, *, is_line_item: bool) -> Draft202012Validator:
+    money = name in LINE_ITEM_MONEY_FIELDS if is_line_item else name in _money_field_names()
+    return _money_field_entry_validator() if money else _field_entry_validator()
+
+
 @dataclass(frozen=True, slots=True)
 class ExtractionOutcome:
     result: dict[str, Any]
     status: str
     gates: tuple[GateResult, ...]
+    truncated: bool = False
 
 
 def _run_ocr(document: DocumentRecord, ocr: OCRReader) -> list[TextRegion]:
@@ -107,6 +131,59 @@ def _validate_model_output(parsed: Mapping[str, Any]) -> None:
     if errors:
         detail = "; ".join(_format_validation_error(e) for e in errors)
         raise ExtractionFailedError(f"LLM output failed schema validation: {detail}")
+
+
+def _salvage_truncated_output(content: str) -> dict[str, Any] | None:
+    """Best-effort recovery from a response cut short by max_tokens (finish_reason == "length").
+
+    Not a repair-prompt retry — asking the model to fix output that is not wrong, only unfinished,
+    just produces another long response with the same chance of truncating again
+    ([[ADR-015-truncated-llm-output-is-salvaged-not-repaired]]). Instead: close out whatever JSON
+    the model had actually finished generating, keep only the field/line-item entries that are
+    individually well-formed, and drop anything that was mid-flight when generation stopped rather
+    than guess at it. Returns None — the genuine-failure case — if nothing usable survives; the
+    caller fails loudly in that case, exactly as it would for any other unparseable response.
+    """
+    try:
+        repaired = json_repair.repair_json(content, return_objects=True)
+    except Exception:
+        return None
+    if not isinstance(repaired, dict):
+        return None
+
+    fields = repaired.get("fields")
+    cleaned_fields: dict[str, Any] = {}
+    if isinstance(fields, dict):
+        for name, entry in fields.items():
+            validator = _entry_validator(name, is_line_item=False)
+            if isinstance(entry, dict) and validator.is_valid(entry):
+                cleaned_fields[name] = entry
+    repaired["fields"] = cleaned_fields
+
+    line_items = repaired.get("line_items")
+    cleaned_line_items: list[dict[str, Any]] = []
+    if isinstance(line_items, list):
+        for item in line_items:
+            if not isinstance(item, dict):
+                continue
+            cleaned_item = {
+                name: entry
+                for name, entry in item.items()
+                if isinstance(entry, dict)
+                and _entry_validator(name, is_line_item=True).is_valid(entry)
+            }
+            if cleaned_item:
+                cleaned_line_items.append(cleaned_item)
+    repaired["line_items"] = cleaned_line_items
+
+    if not cleaned_fields and not cleaned_line_items:
+        return None
+
+    try:
+        _validate_model_output(repaired)
+    except ExtractionFailedError:
+        return None
+    return repaired
 
 
 def _reset_verification(fields: dict[str, Any]) -> None:
@@ -194,6 +271,7 @@ def extract(
 ) -> ExtractionOutcome:
     text_regions = _run_ocr(document, ocr)
     prompt = build_prompt_fn(text_regions)
+    truncated = False
     try:
         parsed = complete_with_repair(
             lambda p: llm.complete(p, document=document),
@@ -201,6 +279,15 @@ def extract(
             validate=_validate_model_output,
             max_retries=max_repair_retries,
         )
+    except TruncatedResponseError as exc:
+        salvaged = _salvage_truncated_output(exc.content)
+        if salvaged is None:
+            raise ExtractionFailedError(
+                "LLM output was truncated by the token limit and no usable field or line item "
+                "survived recovery"
+            ) from exc
+        parsed = salvaged
+        truncated = True
     except RepairExhaustedError as exc:
         raise ExtractionFailedError(str(exc)) from exc
 
@@ -219,7 +306,18 @@ def extract(
     _apply_gates(fields, gate_results)
     _assert_money_fields_gated(fields)
 
-    status = "needs_review" if _needs_review(fields, provenance.unmatched_claims) else "complete"
+    # A truncated response is forced to needs_review regardless of what the ordinary heuristic
+    # would say — a salvage is itself a fallible check (same class as provenance-merge, ADR-012)
+    # and must never be authoritative enough to promote a document to complete on its own.
+    status = (
+        "needs_review"
+        if truncated or _needs_review(fields, provenance.unmatched_claims)
+        else "complete"
+    )
+
+    review: dict[str, Any] = {"required": status != "complete"}
+    if truncated:
+        review["reason"] = "llm_output_truncated"
 
     result: dict[str, Any] = {
         "document_id": document.document_id,
@@ -236,14 +334,16 @@ def extract(
             }
             for r in gate_results
         ],
-        "review": {"required": status != "complete"},
+        "review": review,
     }
     if "language" in parsed:
         result["language"] = parsed["language"]
     if "line_items" in parsed:
         result["line_items"] = line_items
 
-    return ExtractionOutcome(result=result, status=status, gates=tuple(gate_results))
+    return ExtractionOutcome(
+        result=result, status=status, gates=tuple(gate_results), truncated=truncated
+    )
 
 
 def run_and_persist(
@@ -285,5 +385,15 @@ def run_and_persist(
     session.add(row)
     document.status = outcome.status
     document.document_type = outcome.result["document_type"]["value"]
+    if outcome.truncated:
+        document.error = envelope(
+            "LLM_OUTPUT_TRUNCATED",
+            "The model's response was cut off by the output token limit before it finished. "
+            "This extraction is a partial recovery — some fields may be missing. Review before "
+            "trusting it as complete.",
+            str(uuid.uuid4()),
+        )["error"]
+    else:
+        document.error = None
     session.commit()
     return row

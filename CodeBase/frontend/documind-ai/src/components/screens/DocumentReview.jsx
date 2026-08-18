@@ -439,7 +439,16 @@ export default function DocumentReview({ documentId, onBack }) {
     const load = async () => {
       try {
         const result = await getExtraction(documentId);
-        if (!cancelled) setExtraction(result);
+        if (cancelled) return;
+        setExtraction(result);
+        if (result?.review?.reason) {
+          try {
+            const status = await getDocumentStatus(documentId);
+            if (!cancelled) setFailureError(status.error ?? null);
+          } catch {
+            // best-effort detail fetch — the review.reason label alone still renders
+          }
+        }
       } catch (err) {
         if (cancelled) return;
         if (err instanceof ApiError && err.code === 'NOT_READY') {
@@ -726,7 +735,18 @@ export default function DocumentReview({ documentId, onBack }) {
                     </div>
                   )}
 
-                  {extraction.review?.required && (
+                  {extraction.review?.required && extraction.review.reason === 'llm_output_truncated' && (
+                    <Alert variant="warning">
+                      <AlertTriangle className="w-4 h-4" />
+                      <AlertDescription>
+                        {failureError?.message
+                          ? failureError.message
+                          : 'The model\'s response was cut off before it finished — this is a partial extraction. Review before trusting it as complete.'}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+
+                  {extraction.review?.required && extraction.review.reason !== 'llm_output_truncated' && (
                     <Alert variant="warning">
                       <AlertCircle className="w-4 h-4" />
                       <AlertDescription>

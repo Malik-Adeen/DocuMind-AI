@@ -21,6 +21,7 @@ CODES: dict[str, tuple[int, bool]] = {
     "EXTRACTION_FAILED": (422, True),
     "DOCUMENTS_NOT_EXPORTABLE": (422, False),
     "HOSTED_ENDPOINT_REFUSED": (422, False),
+    "LLM_OUTPUT_TRUNCATED": (422, True),
     "RATE_LIMITED": (429, True),
     "INTERNAL": (500, True),
 }

@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-17
-version: 1.2.2
+last_reviewed: 2026-08-18
+version: 1.2.3
 ---
 
 # INDEX.md — map of content
@@ -49,6 +49,7 @@ Summary list in [[PROJECT_CONTEXT]] §8.
 | [[ADR-011-terminal-status-requires-positive-verification-evidence]] | Why an extraction with zero populated fields was routing to `complete` — `all()` over an empty set is vacuously true — and why terminal status must be earned by positive verification, not the absence of an unverified field | Adeen | Before touching `_needs_review` or any other routing decision shaped like "no problems found"; before trusting `complete` without checking `fields` is non-empty |
 | [[ADR-013-single-owner-for-the-api-contract]] | Why `API_CONTRACT.md`'s co-ownership gate is retired and the "not agreed" banner removed — the frontend/backend split ended, not a second review that happened after the fact | Adeen | Before citing the old "both owners agree" rule anywhere, and before assuming an API contract change needs anyone else's sign-off |
 | [[ADR-014-hosted-processing-exception-for-two-named-documents]] | Why `Azeem.jpeg` and `Azeem.pdf` are uploaded `public` for a hosted-profile test under verbal authorization, why this is per-document and not a precedent, and why INV-6 itself is untouched | Adeen | Before treating this ADR as license to classify any other real document `public`, and before citing it as a general exception rather than a two-document one |
+| [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] | Why a `max_tokens`-truncated LLM response is detected via `finish_reason`, salvaged field-by-field instead of retried through the repair prompt, and forced to `needs_review` rather than `failed` or `complete` — and why `hosted_llm_max_tokens` is now a measured `Settings` default, not a hardcoded literal | Adeen | Before touching `HostedChatTransport`, `complete_with_repair`, or the truncation/salvage path in `orchestrator.py`; before assuming any `document.error` implies `status: "failed"` |
 
 ## Code
 

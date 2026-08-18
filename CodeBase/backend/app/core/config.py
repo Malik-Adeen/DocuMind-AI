@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     hosted_llm_base_url: str = ""
     hosted_llm_api_key: str = ""
     hosted_llm_model: str = "Qwen/Qwen2.5-7B-Instruct"
+    hosted_llm_max_tokens: int = 4000
     llm_max_repair_retries: int = 1
 
     celery_broker_url: str = "redis://localhost:6379/1"
