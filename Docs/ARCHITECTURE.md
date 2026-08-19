@@ -2,7 +2,7 @@
 status: active
 owner: Adeen
 last_reviewed: 2026-08-19
-version: 1.5.2
+version: 1.6.0
 ---
 
 # ARCHITECTURE.md
@@ -138,11 +138,13 @@ a worker — that wiring is separate and later.
 hosted-endpoint cost is spent** ([[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]): a page
 count over `Settings.max_pdf_pages` (default 50) fails before OCR even starts, checked via
 `PaddleLatinOCR.page_count()`; and, after OCR, an estimated input-token count
-(`len(joined_ocr_text) // 4`) over `Settings.hosted_llm_max_input_tokens` (default 20000) fails
-before `build_prompt`/the LLM call run at all. Both surface through `app/workers/tasks.py` as
-`document.status = "failed"` with `document.error` populated (`DOCUMENT_TOO_LARGE`,
-[[API_CONTRACT]] §3/§8) — unlike the generic `OrchestratorError` catch-all, which still leaves
-`document.error` null (§7's "Known gaps", unchanged by this).
+(`len(joined_ocr_text) // 4`) over `Settings.hosted_llm_max_input_tokens` (default 20000 — an
+unmeasured engineering estimate, not a measured budget; see
+[[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]) fails before `build_prompt`/the LLM call
+run at all. Both surface through `app/workers/tasks.py` as `document.status = "failed"` with
+`document.error` populated (`DOCUMENT_TOO_LARGE`, [[API_CONTRACT]] §3/§8) — unlike the generic
+`OrchestratorError` catch-all, which still leaves `document.error` null
+([[PROJECT_CONTEXT]] §7's "Known gaps", unchanged by this).
 
 **Stage 4 now has a real hosted transport.** `app/pipeline/llm/transport.py`'s `HostedChatTransport`
 is a thin OpenAI-compatible chat-completions caller, injected as `LLMClient.transport` — it does not
@@ -443,6 +445,8 @@ new migration.
 
 | Failure | Behaviour |
 |---|---|
+| PDF page count exceeds `max_pdf_pages` | fail fast, before a single page is rasterized or OCR'd — `DOCUMENT_TOO_LARGE`, not retryable (the page count does not change on retry). `PaddleLatinOCR.page_count()` runs before `_run_ocr`'s read loop. See [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]. |
+| Estimated OCR text (`len(text) // 4`) exceeds `hosted_llm_max_input_tokens` | fail fast, after OCR but before `build_prompt`/the LLM call — `DOCUMENT_TOO_LARGE`, not retryable. `hosted_llm_max_input_tokens` (default 20000) is an unmeasured estimate, not a measured budget — see [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]. |
 | OCR returns near-empty text | fail fast, `OCR_FAILED`, retryable. Do not send empty text to the LLM. |
 | LLM emits invalid JSON, not truncated (`finish_reason` is not `"length"`) | retry once with a repair prompt; then `EXTRACTION_FAILED`. **Still never regex-patch the JSON** — this row's rule is unreversed; see the next row for the one narrow exception. |
 | LLM response is truncated (`finish_reason: "length"`) | **Not retried via the repair prompt** — resending the original prompt plus a ~4000-token bad output is a longer request with the same odds of truncating again. Instead: syntactically close out whatever JSON the model had actually finished, keep only the field/line-item entries that individually validate against `EXTRACTION_SCHEMA.json`, drop anything mid-flight. If something survives: `needs_review`, `review.reason: "llm_output_truncated"`, `/status.error` populated (`LLM_OUTPUT_TRUNCATED`) even though the document is not `failed` — the one case where `error` is non-null on a non-`failed` document. If nothing survives: `EXTRACTION_FAILED`, same as any other unrecoverable response. **This row is a deliberate, narrow reversal of the row above's "never regex-patch the JSON"** — the recovery step genuinely is a patch-and-close-out operation, not something else wearing a different name. What makes it safe here and nowhere else: every recovered entry is independently re-validated against the same schema a complete response has to pass, and anything that fails that check is dropped rather than trusted. See [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] for the full reasoning and what it explicitly reverses. |

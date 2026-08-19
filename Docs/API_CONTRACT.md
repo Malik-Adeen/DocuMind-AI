@@ -74,9 +74,11 @@ Content-Type: multipart/form-data
 **Every page of a `pdf` upload is rasterized and OCR'd, and all of it is fed into one extraction
 call** ([[decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]) — not page 1 alone.
 There is a cap: a document whose page count exceeds `max_pdf_pages` (default 50), or whose OCR'd
-text is estimated to exceed `hosted_llm_max_input_tokens` (default 20000, `chars // 4`), fails the
-extraction with `422 DOCUMENT_TOO_LARGE` (§3, §8) before any LLM call is made, rather than truncating
-silently or reading a partial document. Frontend: a very-large PDF can now fail this way — surface
+text is estimated to exceed `hosted_llm_max_input_tokens` (default 20000, `chars // 4` — an
+unmeasured engineering estimate, not a measured budget; see
+[[decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]), fails the extraction with
+`422 DOCUMENT_TOO_LARGE` (§3, §8) before any LLM call is made, rather than truncating silently or
+reading a partial document. Frontend: a very-large PDF can now fail this way — surface
 `error.message` from `GET .../status` the same as any other `failed`-status cause (§3).
 
 ### `data_classification` is required, not defaulted (new in 0.3.0)
@@ -179,10 +181,12 @@ If nothing recoverable survived the truncation, the document *is* `failed` and r
 
 **Still `null`:** OCR failure, LLM schema-validation failure after repair (including a truncated
 response with nothing recoverable — both report `EXTRACTION_FAILED` server-side with no further
-detail yet), and gate-coverage failure (`OrchestratorError` and its subclasses) — their cause
-reaches the server log with a `stage`, but not yet the API. This is a narrower version of the gap
-this section used to describe in full; see [[PROJECT_CONTEXT]] §7's "Known gaps" for the current
-boundary.
+detail yet), and gate-coverage failure — specifically `OCRFailedError`, `ExtractionFailedError` and
+`GateCoverageError`, the three `OrchestratorError` subclasses that do **not** populate `error`. Their
+cause reaches the server log with a `stage`, but not yet the API. **`DocumentTooLargeError` is also
+an `OrchestratorError` subclass but is not in this list** — per the table above, it is the one
+subclass whose `error` field IS populated. This is a narrower version of the gap this section used to
+describe in full; see [[PROJECT_CONTEXT]] §7's "Known gaps" for the current boundary.
 
 **`message` never contains document content, by construction, not by filtering.**
 `HOSTED_ENDPOINT_REFUSED`'s message is `HostedEndpointRefusedError`'s own text, which

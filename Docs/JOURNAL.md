@@ -37,7 +37,10 @@ Entry format:
 `_run_ocr` loops every page, +`DocumentTooLargeError`, input-token-budget check in `extract()`),
 `CodeBase/backend/app/pipeline/llm/prompt_builder.py` (`--- Page N ---` markers, single-page prompt
 unchanged), `CodeBase/backend/app/workers/tasks.py` (`DocumentTooLargeError` branch populates
-`document.error`), branch `multipage-pdf-support`, off `master`.
+`document.error`), `CodeBase/backend/.env.example` (+`HOSTED_LLM_MAX_INPUT_TOKENS`, +`MAX_PDF_PAGES`),
+`Docs/decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge.md` (new), `Docs/ARCHITECTURE.md`
+§2/§4/§7, `Docs/API_CONTRACT.md` (0.3.8 → 0.3.9), `Docs/PROJECT_CONTEXT.md` §7/§8, `Docs/INDEX.md`,
+branch `multipage-pdf-support`, off `master`.
 
 **Did:** `_run_ocr` previously called `ocr.read(path, page=1)` unconditionally — a multi-page PDF
 silently extracted page 1 only, with no signal anywhere that later pages existed
