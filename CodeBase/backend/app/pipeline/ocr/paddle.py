@@ -155,6 +155,18 @@ class PaddleLatinOCR:
             self._engine = self.loader()
         return self._engine
 
+    def page_count(self, image_path: str | Path) -> int:
+        path = Path(image_path)
+        if path.suffix.lower() != ".pdf":
+            return 1
+        import pypdfium2 as pdfium
+
+        pdf = pdfium.PdfDocument(str(path))
+        try:
+            return len(pdf)
+        finally:
+            pdf.close()
+
     def read(
         self,
         image_path: str | Path,

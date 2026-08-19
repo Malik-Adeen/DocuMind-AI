@@ -95,6 +95,22 @@ def test_non_llm_origin_is_skipped() -> None:
     assert report.claimed_fields == 0
 
 
+def test_claim_matched_only_on_page_two_of_a_three_page_document_resolves_that_page() -> None:
+    fields = {"po_number": field("PO-2291", raw_text="PO Number: PO-2291")}
+    regions = [
+        region("Cover page, no useful fields here", bbox=(0.0, 0.0, 1.0, 1.0), page=1),
+        region("PO Number: PO-2291", bbox=(0.1, 0.2, 0.5, 0.25), page=2),
+        region("Signature page text", bbox=(0.0, 0.0, 1.0, 1.0), page=3),
+    ]
+
+    report = attach_provenance(fields, [], regions)
+
+    source = fields["po_number"]["source"]
+    assert source["page"] == 2
+    assert source["bbox"] == [0.1, 0.2, 0.5, 0.25]
+    assert report.resolved_fields == 1
+
+
 def test_line_item_field_gets_provenance_attached() -> None:
     line_items = [
         {

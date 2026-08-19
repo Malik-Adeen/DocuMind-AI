@@ -21,7 +21,12 @@ from app.pipeline.llm.client import (
 )
 from app.pipeline.llm.transport import HostedChatTransport
 from app.pipeline.ocr.paddle import PaddleLatinOCR
-from app.pipeline.orchestrator import OCRReader, OrchestratorError, run_and_persist
+from app.pipeline.orchestrator import (
+    DocumentTooLargeError,
+    OCRReader,
+    OrchestratorError,
+    run_and_persist,
+)
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger("app")
@@ -75,12 +80,15 @@ def extract_document(document_id: str) -> None:
             return
         document.status = "extracting"
         session.commit()
+        settings = get_settings()
         try:
             run_and_persist(
                 session,
                 document,
                 ocr=build_ocr_reader(),
                 llm=build_llm_client(),
+                max_pdf_pages=settings.max_pdf_pages,
+                max_input_tokens=settings.hosted_llm_max_input_tokens,
             )
         except HostedEndpointRefusedError as exc:
             error_trace_id = uuid.uuid4()
@@ -91,6 +99,17 @@ def extract_document(document_id: str) -> None:
             session.commit()
             logger.error(
                 "extract_document: %s refused by INV-6 guard (trace_id=%s): %s",
+                document_id,
+                error_trace_id,
+                exc,
+            )
+        except DocumentTooLargeError as exc:
+            error_trace_id = uuid.uuid4()
+            document.status = "failed"
+            document.error = envelope("DOCUMENT_TOO_LARGE", str(exc), str(error_trace_id))["error"]
+            session.commit()
+            logger.error(
+                "extract_document: %s exceeded the input budget (trace_id=%s): %s",
                 document_id,
                 error_trace_id,
                 exc,

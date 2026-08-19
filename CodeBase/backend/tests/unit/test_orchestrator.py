@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
@@ -19,6 +19,7 @@ from app.pipeline.llm.transport import TruncatedResponseError
 from app.pipeline.ocr.paddle import TextRegion
 from app.pipeline.orchestrator import (
     DEFAULT_GATES,
+    DocumentTooLargeError,
     ExtractionFailedError,
     GateCoverageError,
     OCRFailedError,
@@ -30,11 +31,27 @@ IBAN_BAD_CHECKSUM = "PK70BANK0000001234567890"
 
 
 class FakeOCR:
-    def __init__(self, regions: Sequence[TextRegion]) -> None:
-        self._regions = list(regions)
+    def __init__(
+        self,
+        regions: Sequence[TextRegion] | Mapping[int, Sequence[TextRegion]],
+        *,
+        page_count: int | None = None,
+    ) -> None:
+        if isinstance(regions, Mapping):
+            self._pages: dict[int, list[TextRegion]] = {
+                page: list(page_regions) for page, page_regions in regions.items()
+            }
+        else:
+            self._pages = {1: list(regions)}
+        self._page_count = page_count if page_count is not None else max(self._pages, default=1)
+        self.read_calls: list[int] = []
 
     def read(self, image_path: str, *, page: int = 1) -> Sequence[TextRegion]:
-        return self._regions
+        self.read_calls.append(page)
+        return self._pages.get(page, [])
+
+    def page_count(self, image_path: str) -> int:
+        return self._page_count
 
 
 class Spy:
@@ -513,6 +530,116 @@ def test_field_without_raw_text_has_no_bbox_and_can_still_complete() -> None:
     source = outcome.result["fields"]["iban"]["source"]
     assert "bbox" not in source
     assert outcome.status == "complete"
+
+
+def test_multipage_document_feeds_regions_from_every_page_into_the_extraction() -> None:
+    fields = {
+        "iban": llm_field(
+            IBAN_VALID, source={"origin": "llm_inferred", "raw_text": "IBAN: " + IBAN_VALID}
+        ),
+        "po_number": llm_field(
+            "PO-2291", source={"origin": "llm_inferred", "raw_text": "PO Number: PO-2291"}
+        ),
+    }
+    llm, _spy = hosted_llm(llm_body(fields))
+    ocr = FakeOCR(
+        {
+            1: [TextRegion(text="Cover Page", confidence=0.9, bbox=(0.1, 0.1, 0.5, 0.2), page=1)],
+            2: [
+                TextRegion(
+                    text="PO Number: PO-2291",
+                    confidence=0.9,
+                    bbox=(0.1, 0.1, 0.5, 0.2),
+                    page=2,
+                )
+            ],
+            3: [
+                TextRegion(
+                    text="IBAN: " + IBAN_VALID,
+                    confidence=0.9,
+                    bbox=(0.2, 0.2, 0.6, 0.3),
+                    page=3,
+                )
+            ],
+        }
+    )
+
+    outcome = extract(document(), ocr=ocr, llm=llm)
+
+    assert ocr.read_calls == [1, 2, 3]
+    assert outcome.result["fields"]["po_number"]["source"]["page"] == 2
+    assert outcome.result["fields"]["iban"]["source"]["page"] == 3
+
+
+def test_field_claimed_only_on_page_three_resolves_source_page_three_end_to_end() -> None:
+    fields = {
+        "customer_name": llm_field(
+            "Acme Textiles",
+            source={"origin": "llm_inferred", "raw_text": "Customer: Acme Textiles"},
+        )
+    }
+    llm, _spy = hosted_llm(llm_body(fields))
+    ocr = FakeOCR(
+        {
+            1: [
+                TextRegion(
+                    text="Cover page only", confidence=0.9, bbox=(0.0, 0.0, 1.0, 1.0), page=1
+                )
+            ],
+            2: [
+                TextRegion(
+                    text="Unrelated page two text",
+                    confidence=0.9,
+                    bbox=(0.0, 0.0, 1.0, 1.0),
+                    page=2,
+                )
+            ],
+            3: [
+                TextRegion(
+                    text="Customer: Acme Textiles",
+                    confidence=0.9,
+                    bbox=(0.1, 0.1, 0.6, 0.2),
+                    page=3,
+                )
+            ],
+        }
+    )
+
+    outcome = extract(document(), ocr=ocr, llm=llm)
+
+    assert outcome.result["fields"]["customer_name"]["source"]["page"] == 3
+
+
+def test_page_count_exceeding_max_pdf_pages_raises_before_any_ocr_read() -> None:
+    llm, spy = hosted_llm(llm_body({}))
+    ocr = FakeOCR(regions(), page_count=51)
+
+    with pytest.raises(DocumentTooLargeError):
+        extract(document(), ocr=ocr, llm=llm, max_pdf_pages=50)
+
+    assert ocr.read_calls == [], "read() must never be called once the page cap is exceeded"
+    assert spy.calls == []
+
+
+def test_page_count_exactly_at_the_cap_is_allowed() -> None:
+    llm, _spy = hosted_llm(llm_body({}))
+    ocr = FakeOCR(regions(), page_count=1)
+
+    outcome = extract(document(), ocr=ocr, llm=llm, max_pdf_pages=1)
+
+    assert ocr.read_calls == [1]
+    assert outcome.status == "needs_review"
+
+
+def test_ocr_text_exceeding_max_input_tokens_raises_before_the_llm_is_called() -> None:
+    llm, spy = hosted_llm(llm_body({}))
+    huge_text = "x" * 1000
+    ocr = FakeOCR([TextRegion(text=huge_text, confidence=0.9, bbox=(0.0, 0.0, 1.0, 1.0), page=1)])
+
+    with pytest.raises(DocumentTooLargeError):
+        extract(document(), ocr=ocr, llm=llm, max_input_tokens=10)
+
+    assert spy.calls == [], "the LLM transport must never be reached once the input budget is blown"
 
 
 def test_line_item_field_provenance_is_attached() -> None:

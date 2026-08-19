@@ -7,8 +7,8 @@ from app.pipeline.ocr.paddle import TextRegion
 from app.schemas.extraction import model_output_schema
 
 
-def region(text: str) -> TextRegion:
-    return TextRegion(text=text, confidence=0.9, bbox=(0.1, 0.1, 0.5, 0.2), page=1)
+def region(text: str, page: int = 1) -> TextRegion:
+    return TextRegion(text=text, confidence=0.9, bbox=(0.1, 0.1, 0.5, 0.2), page=page)
 
 
 def test_template_is_a_real_file_not_an_inline_string() -> None:
@@ -70,3 +70,18 @@ def test_build_prompt_text_still_warns_against_inferring_mrc_otc_from_nearby_fie
     assert "otc" in prompt.lower()
     assert "billing_terms" in prompt.lower()
     assert "nearby" in prompt.lower() or "infer" in prompt.lower()
+
+
+def test_build_prompt_inserts_a_page_marker_between_pages() -> None:
+    prompt = build_prompt([region("Cover page text", page=1), region("Invoice total", page=2)])
+
+    assert "--- Page 1 ---" in prompt
+    assert "--- Page 2 ---" in prompt
+    assert prompt.index("Cover page text") < prompt.index("--- Page 2 ---")
+    assert prompt.index("--- Page 2 ---") < prompt.index("Invoice total")
+
+
+def test_build_prompt_has_no_page_marker_for_a_single_page_document() -> None:
+    prompt = build_prompt([region("PO Number: PO-2291", page=1)])
+
+    assert "--- Page" not in prompt
