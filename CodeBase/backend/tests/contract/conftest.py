@@ -62,6 +62,9 @@ def _fake_ocr_reader() -> Any:
         def read(self, image_path: str, *, page: int = 1) -> list[TextRegion]:
             return [TextRegion(text="mock", confidence=1.0, bbox=(0.0, 0.0, 1.0, 1.0), page=page)]
 
+        def page_count(self, image_path: str) -> int:
+            return 1
+
     return _FakeOCR()
 
 
