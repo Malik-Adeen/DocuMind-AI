@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-18
-version: 1.5.1
+last_reviewed: 2026-08-19
+version: 1.5.2
 ---
 
 # ARCHITECTURE.md
@@ -96,9 +96,12 @@ Redis ──► Celery worker ────┘
               ├─ Stage 1a Deskew                  → level a skewed scan before OCR reads it;
               │             exact no-op on an already-straight page
               │             (app/pipeline/ocr/deskew.py)
-              ├─ Stage 1b PaddleOCR PP-OCRv5      → text + layout boxes
-              │             app/pipeline/ocr/paddle.py — model load is lazy
-              │             and injectable; regions carry normalised 0..1
+              ├─ Stage 1b PaddleOCR PP-OCRv5      → page count discovered up front
+              │             (page_count(), pypdfium2), every page rasterized
+              │             and read — not page 1 only ([[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]);
+              │             a page count over max_pdf_pages fails fast, before
+              │             any OCR call. app/pipeline/ocr/paddle.py — model load
+              │             is lazy and injectable; regions carry normalised 0..1
               │             bboxes + per-region confidence (INV-2), remapped
               │             back onto the pre-deskew image (Stage 1a)
               ├─ Stage 2  Qaari-0.1-Urdu          → Urdu regions only
@@ -130,6 +133,16 @@ isolation. `extract()` is a pure function, `DocumentRecord` in and an `Extractio
 OCR/LLM/gates all injected; `run_and_persist()` wraps it with a `Session` to write the `Extraction`
 row and update `documents.status`. It does not import Celery or know it will eventually run inside
 a worker — that wiring is separate and later.
+
+**Two fail-fast checks now guard the LLM call, both raising `DocumentTooLargeError` before any
+hosted-endpoint cost is spent** ([[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]): a page
+count over `Settings.max_pdf_pages` (default 50) fails before OCR even starts, checked via
+`PaddleLatinOCR.page_count()`; and, after OCR, an estimated input-token count
+(`len(joined_ocr_text) // 4`) over `Settings.hosted_llm_max_input_tokens` (default 20000) fails
+before `build_prompt`/the LLM call run at all. Both surface through `app/workers/tasks.py` as
+`document.status = "failed"` with `document.error` populated (`DOCUMENT_TOO_LARGE`,
+[[API_CONTRACT]] §3/§8) — unlike the generic `OrchestratorError` catch-all, which still leaves
+`document.error` null (§7's "Known gaps", unchanged by this).
 
 **Stage 4 now has a real hosted transport.** `app/pipeline/llm/transport.py`'s `HostedChatTransport`
 is a thin OpenAI-compatible chat-completions caller, injected as `LLMClient.transport` — it does not
@@ -240,6 +253,14 @@ untestable. Model loading is lazy and the loader is injectable, so the unit test
 model nor a GPU; a mismatch between the engine's texts, scores and polygons raises rather than
 truncating, because a silently dropped region is a field that reaches the reviewer with no
 provenance (INV-2).
+
+**`page_count()` is also `PaddleLatinOCR`'s (new,
+[[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]): the real PDF page count via
+`pypdfium2`, or `1` for a non-PDF image.** `_run_ocr` (`orchestrator.py`) calls it before reading
+anything, so a page count over `Settings.max_pdf_pages` (default 50) raises `DocumentTooLargeError`
+before a single page is rasterized — not discovered midway through a 200-page OCR run. Below that
+cap, every page `1..count` is rasterized and OCR'd, in page order, not page 1 alone; the previous
+`page=1`-only call was the original bug this ADR fixed, not an intended limitation.
 
 **Stage 1a is `app/pipeline/ocr/deskew.py` — its own module, not inlined into paddle.py, for the
 same reason the Qaari merge is its own module and not inlined into the Latin reader.** Skew
