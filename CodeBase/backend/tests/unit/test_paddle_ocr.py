@@ -302,6 +302,20 @@ def test_the_original_upload_is_never_mutated_when_deskew_fires_inv_3(tmp_path: 
     assert scan_path.read_bytes() == before
 
 
+def test_page_count_returns_the_number_of_pages_in_a_pdf(tmp_path: Path) -> None:
+    pdf_path = make_pdf(tmp_path / "doc.pdf", [(400, 200), (200, 400), (300, 300)])
+    ocr, _ = reader(result())
+
+    assert ocr.page_count(pdf_path) == 3
+
+
+def test_page_count_of_a_plain_image_is_always_one(tmp_path: Path) -> None:
+    image_path = make_ruled_png(tmp_path / "scan.png")
+    ocr, _ = reader(result())
+
+    assert ocr.page_count(image_path) == 1
+
+
 def test_bboxes_on_a_skewed_page_are_remapped_back_onto_the_original_image(tmp_path: Path) -> None:
     from app.pipeline.ocr.deskew import estimate_skew_degrees, map_bbox_to_original
 

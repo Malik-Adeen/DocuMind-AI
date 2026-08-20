@@ -50,8 +50,13 @@ class GateCoverageError(OrchestratorError):
     stage = "gates"
 
 
+class DocumentTooLargeError(OrchestratorError):
+    stage = "input_budget"
+
+
 class OCRReader(Protocol):
     def read(self, image_path: str, *, page: int = 1) -> Sequence[TextRegion]: ...
+    def page_count(self, image_path: str) -> int: ...
 
 
 def _single(gate: Callable[[Mapping[str, Any]], GateResult]) -> GateRunner:
@@ -108,10 +113,18 @@ class ExtractionOutcome:
     truncated: bool = False
 
 
-def _run_ocr(document: DocumentRecord, ocr: OCRReader) -> list[TextRegion]:
+def _run_ocr(document: DocumentRecord, ocr: OCRReader, max_pdf_pages: int) -> list[TextRegion]:
     if not document.storage_path:
         raise OCRFailedError(f"document {document.document_id} has no storage_path to read")
-    found = list(ocr.read(document.storage_path, page=1))
+    count = ocr.page_count(document.storage_path)
+    if count > max_pdf_pages:
+        raise DocumentTooLargeError(
+            f"document {document.document_id} has {count} pages, exceeding the max_pdf_pages "
+            f"cap of {max_pdf_pages}"
+        )
+    found: list[TextRegion] = []
+    for page in range(1, count + 1):
+        found.extend(ocr.read(document.storage_path, page=page))
     if not any(region.text.strip() for region in found):
         raise OCRFailedError(f"OCR produced no usable text for document {document.document_id}")
     return found
@@ -268,8 +281,19 @@ def extract(
     gates: Sequence[GateRunner] = DEFAULT_GATES,
     build_prompt_fn: Callable[[Sequence[TextRegion]], str] = build_prompt,
     max_repair_retries: int = 1,
+    max_pdf_pages: int = 50,
+    max_input_tokens: int = 20000,
 ) -> ExtractionOutcome:
-    text_regions = _run_ocr(document, ocr)
+    text_regions = _run_ocr(document, ocr, max_pdf_pages)
+
+    joined_text = "\n".join(region.text for region in text_regions if region.text.strip())
+    estimated_tokens = len(joined_text) // 4
+    if estimated_tokens > max_input_tokens:
+        raise DocumentTooLargeError(
+            f"document {document.document_id} OCR text is ~{estimated_tokens} tokens, exceeding "
+            f"the max_input_tokens cap of {max_input_tokens}"
+        )
+
     prompt = build_prompt_fn(text_regions)
     truncated = False
     try:
@@ -355,6 +379,8 @@ def run_and_persist(
     gates: Sequence[GateRunner] = DEFAULT_GATES,
     build_prompt_fn: Callable[[Sequence[TextRegion]], str] = build_prompt,
     max_repair_retries: int = 1,
+    max_pdf_pages: int = 50,
+    max_input_tokens: int = 20000,
 ) -> Extraction:
     record = DocumentRecord(
         document_id=str(document.id),
@@ -370,6 +396,8 @@ def run_and_persist(
         gates=gates,
         build_prompt_fn=build_prompt_fn,
         max_repair_retries=max_repair_retries,
+        max_pdf_pages=max_pdf_pages,
+        max_input_tokens=max_input_tokens,
     )
 
     extraction_id = uuid.uuid4()

@@ -28,6 +28,55 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-19 — multi-page PDFs are read in full, one extraction call over every page (ADR-016)
+
+**Touched:** no INV directly (closes the open question in [[PROJECT_CONTEXT]] §7) ·
+`CodeBase/backend/app/core/config.py` (+`max_pdf_pages`, +`hosted_llm_max_input_tokens`),
+`CodeBase/backend/app/core/errors.py` (+`DOCUMENT_TOO_LARGE`), `CodeBase/backend/app/pipeline/ocr/paddle.py`
+(+`PaddleLatinOCR.page_count()`), `CodeBase/backend/app/pipeline/orchestrator.py` (`OCRReader.page_count`,
+`_run_ocr` loops every page, +`DocumentTooLargeError`, input-token-budget check in `extract()`),
+`CodeBase/backend/app/pipeline/llm/prompt_builder.py` (`--- Page N ---` markers, single-page prompt
+unchanged), `CodeBase/backend/app/workers/tasks.py` (`DocumentTooLargeError` branch populates
+`document.error`), `CodeBase/backend/.env.example` (+`HOSTED_LLM_MAX_INPUT_TOKENS`, +`MAX_PDF_PAGES`),
+`Docs/decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge.md` (new), `Docs/ARCHITECTURE.md`
+§2/§4/§7, `Docs/API_CONTRACT.md` (0.3.8 → 0.3.9), `Docs/PROJECT_CONTEXT.md` §7/§8, `Docs/INDEX.md`,
+branch `multipage-pdf-support`, off `master`.
+
+**Did:** `_run_ocr` previously called `ocr.read(path, page=1)` unconditionally — a multi-page PDF
+silently extracted page 1 only, with no signal anywhere that later pages existed
+(`a87f681`). `PaddleLatinOCR.read()` already supported reading an arbitrary page; nothing upstream
+ever asked for more than one. Fixed: `page_count()` (new, via `pypdfium2`) is called first; a count
+over `max_pdf_pages` (default 50) raises `DocumentTooLargeError` before any OCR call; otherwise every
+page `1..count` is OCR'd and all regions collected in page order. `build_prompt` groups regions by
+page with a `--- Page N ---` marker (byte-identical output for single-page documents). `extract()`
+adds a second fail-fast check after OCR: estimated input tokens (`len(text)//4`) over
+`hosted_llm_max_input_tokens` (default 20000) also raises `DocumentTooLargeError`, before the LLM is
+ever called. `provenance.py` needed no change — it already required a matched quote's regions to
+share one page. Everything downstream of OCR (prompt building past `build_prompt`, the LLM call,
+provenance, gates, `needs_review` routing, ADR-015's truncation salvage) is unchanged in logic.
+Follow-up commit `b74d091` fixed `tests/contract/conftest.py` and two integration test files whose
+`OCRReader` test doubles didn't implement the widened Protocol's new `page_count()` method
+(`AttributeError`, both suites broken since `a87f681`).
+
+Recorded the two design decisions in [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]: one
+LLM call over all pages' OCR text, not per-page extraction+merge (N× cost, fragments page-spanning
+content) and not a page-relevance filter (risks silently reintroducing the original bug); and no new
+field-conflict/arbitration mechanism, because a single-call design produces no per-page candidates to
+arbitrate in the first place — `check_arithmetic` remains the only backstop, unchanged. Flagged
+`hosted_llm_max_input_tokens=20000` explicitly as an unmeasured engineering estimate (Qwen2.5-7B's
+32768-token window minus the ~3000-token prompt template and the 4000-token output reserve), not a
+measurement like ADR-015's output-token range — revisit once the deployed vLLM `--max-model-len` is
+known.
+
+**Learned / broke:** widening a `Protocol` (`OCRReader.page_count`) breaks every structural
+implementer silently at runtime, not at import time — `mypy --strict` over `app/` doesn't catch a
+test double under `tests/` failing to implement it, so the two broken suites only surfaced on a live
+`pytest` run, not statically.
+
+**Next:** frontend (`DocumentReview.jsx`) still never reads `field.source.page` and still shows PDFs
+as a download fallback — no page-count API field, no per-page image endpoint, no page-switcher UI.
+`source.page` is correct end-to-end in the API response now; nothing displays it yet.
+
 ## 2026-08-18 — truncated LLM output is detected via finish_reason, salvaged instead of retried, and forced to needs_review (ADR-015)
 
 **Touched:** no INV directly (fallible-check discipline, same class as INV-2/ADR-012) ·

@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-18
-version: 1.5.1
+last_reviewed: 2026-08-19
+version: 1.6.0
 ---
 
 # ARCHITECTURE.md
@@ -96,9 +96,12 @@ Redis ──► Celery worker ────┘
               ├─ Stage 1a Deskew                  → level a skewed scan before OCR reads it;
               │             exact no-op on an already-straight page
               │             (app/pipeline/ocr/deskew.py)
-              ├─ Stage 1b PaddleOCR PP-OCRv5      → text + layout boxes
-              │             app/pipeline/ocr/paddle.py — model load is lazy
-              │             and injectable; regions carry normalised 0..1
+              ├─ Stage 1b PaddleOCR PP-OCRv5      → page count discovered up front
+              │             (page_count(), pypdfium2), every page rasterized
+              │             and read — not page 1 only ([[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]);
+              │             a page count over max_pdf_pages fails fast, before
+              │             any OCR call. app/pipeline/ocr/paddle.py — model load
+              │             is lazy and injectable; regions carry normalised 0..1
               │             bboxes + per-region confidence (INV-2), remapped
               │             back onto the pre-deskew image (Stage 1a)
               ├─ Stage 2  Qaari-0.1-Urdu          → Urdu regions only
@@ -130,6 +133,18 @@ isolation. `extract()` is a pure function, `DocumentRecord` in and an `Extractio
 OCR/LLM/gates all injected; `run_and_persist()` wraps it with a `Session` to write the `Extraction`
 row and update `documents.status`. It does not import Celery or know it will eventually run inside
 a worker — that wiring is separate and later.
+
+**Two fail-fast checks now guard the LLM call, both raising `DocumentTooLargeError` before any
+hosted-endpoint cost is spent** ([[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]): a page
+count over `Settings.max_pdf_pages` (default 50) fails before OCR even starts, checked via
+`PaddleLatinOCR.page_count()`; and, after OCR, an estimated input-token count
+(`len(joined_ocr_text) // 4`) over `Settings.hosted_llm_max_input_tokens` (default 20000 — an
+unmeasured engineering estimate, not a measured budget; see
+[[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]) fails before `build_prompt`/the LLM call
+run at all. Both surface through `app/workers/tasks.py` as `document.status = "failed"` with
+`document.error` populated (`DOCUMENT_TOO_LARGE`, [[API_CONTRACT]] §3/§8) — unlike the generic
+`OrchestratorError` catch-all, which still leaves `document.error` null
+([[PROJECT_CONTEXT]] §7's "Known gaps", unchanged by this).
 
 **Stage 4 now has a real hosted transport.** `app/pipeline/llm/transport.py`'s `HostedChatTransport`
 is a thin OpenAI-compatible chat-completions caller, injected as `LLMClient.transport` — it does not
@@ -240,6 +255,14 @@ untestable. Model loading is lazy and the loader is injectable, so the unit test
 model nor a GPU; a mismatch between the engine's texts, scores and polygons raises rather than
 truncating, because a silently dropped region is a field that reaches the reviewer with no
 provenance (INV-2).
+
+**`page_count()` is also `PaddleLatinOCR`'s (new,
+[[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]): the real PDF page count via
+`pypdfium2`, or `1` for a non-PDF image.** `_run_ocr` (`orchestrator.py`) calls it before reading
+anything, so a page count over `Settings.max_pdf_pages` (default 50) raises `DocumentTooLargeError`
+before a single page is rasterized — not discovered midway through a 200-page OCR run. Below that
+cap, every page `1..count` is rasterized and OCR'd, in page order, not page 1 alone; the previous
+`page=1`-only call was the original bug this ADR fixed, not an intended limitation.
 
 **Stage 1a is `app/pipeline/ocr/deskew.py` — its own module, not inlined into paddle.py, for the
 same reason the Qaari merge is its own module and not inlined into the Latin reader.** Skew
@@ -422,6 +445,8 @@ new migration.
 
 | Failure | Behaviour |
 |---|---|
+| PDF page count exceeds `max_pdf_pages` | fail fast, before a single page is rasterized or OCR'd — `DOCUMENT_TOO_LARGE`, not retryable (the page count does not change on retry). `PaddleLatinOCR.page_count()` runs before `_run_ocr`'s read loop. See [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]. |
+| Estimated OCR text (`len(text) // 4`) exceeds `hosted_llm_max_input_tokens` | fail fast, after OCR but before `build_prompt`/the LLM call — `DOCUMENT_TOO_LARGE`, not retryable. `hosted_llm_max_input_tokens` (default 20000) is an unmeasured estimate, not a measured budget — see [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]. |
 | OCR returns near-empty text | fail fast, `OCR_FAILED`, retryable. Do not send empty text to the LLM. |
 | LLM emits invalid JSON, not truncated (`finish_reason` is not `"length"`) | retry once with a repair prompt; then `EXTRACTION_FAILED`. **Still never regex-patch the JSON** — this row's rule is unreversed; see the next row for the one narrow exception. |
 | LLM response is truncated (`finish_reason: "length"`) | **Not retried via the repair prompt** — resending the original prompt plus a ~4000-token bad output is a longer request with the same odds of truncating again. Instead: syntactically close out whatever JSON the model had actually finished, keep only the field/line-item entries that individually validate against `EXTRACTION_SCHEMA.json`, drop anything mid-flight. If something survives: `needs_review`, `review.reason: "llm_output_truncated"`, `/status.error` populated (`LLM_OUTPUT_TRUNCATED`) even though the document is not `failed` — the one case where `error` is non-null on a non-`failed` document. If nothing survives: `EXTRACTION_FAILED`, same as any other unrecoverable response. **This row is a deliberate, narrow reversal of the row above's "never regex-patch the JSON"** — the recovery step genuinely is a patch-and-close-out operation, not something else wearing a different name. What makes it safe here and nowhere else: every recovered entry is independently re-validated against the same schema a complete response has to pass, and anything that fails that check is dropped rather than trusted. See [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] for the full reasoning and what it explicitly reverses. |

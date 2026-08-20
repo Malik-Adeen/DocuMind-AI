@@ -25,10 +25,16 @@ class _FakeOCR:
             )
         ]
 
+    def page_count(self, image_path: str) -> int:
+        return 1
+
 
 class _RaisingOCR:
     def read(self, image_path: str, *, page: int = 1) -> list[TextRegion]:
         raise RuntimeError(SECRET)
+
+    def page_count(self, image_path: str) -> int:
+        return 1
 
 
 class _UnreachableTransport:

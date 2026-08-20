@@ -1,13 +1,13 @@
 ---
 status: draft
 owner: Adeen
-last_reviewed: 2026-08-18
-version: 0.3.8
+last_reviewed: 2026-08-19
+version: 0.3.9
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.8 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.3.9 · **Status:** Draft — freeze before frontend work starts
 **Owner:** Adeen, backend and frontend both. Single owner as of
 [[decisions/ADR-013-single-owner-for-the-api-contract]] (2026-08-14) — previously co-owned with a
 separate frontend developer; see that ADR for what changed. Changes still land with the version
@@ -71,11 +71,15 @@ Content-Type: multipart/form-data
 
 > Frontend: treat this list as closed. If an unknown status arrives, show it verbatim and do not crash.
 
-**A `pdf` upload is rasterized to page 1 only before OCR runs.** Pages beyond the first are not read
-today — a multi-page PDF's extraction reflects page 1 alone, with no signal in the response that
-later pages exist or were skipped. Frontend: if the uploader picks a multi-page PDF, warn them
-before this endpoint sees it, or split it client-side; the API gives you nothing to detect the
-truncation after the fact.
+**Every page of a `pdf` upload is rasterized and OCR'd, and all of it is fed into one extraction
+call** ([[decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]) — not page 1 alone.
+There is a cap: a document whose page count exceeds `max_pdf_pages` (default 50), or whose OCR'd
+text is estimated to exceed `hosted_llm_max_input_tokens` (default 20000, `chars // 4` — an
+unmeasured engineering estimate, not a measured budget; see
+[[decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]), fails the extraction with
+`422 DOCUMENT_TOO_LARGE` (§3, §8) before any LLM call is made, rather than truncating silently or
+reading a partial document. Frontend: a very-large PDF can now fail this way — surface
+`error.message` from `GET .../status` the same as any other `failed`-status cause (§3).
 
 ### `data_classification` is required, not defaulted (new in 0.3.0)
 
@@ -146,9 +150,9 @@ GET /api/v1/documents/{id}/status
 
 Poll interval: 2 s while not terminal. Terminal states: `complete`, `needs_review`, `failed`.
 
-### `error` is populated for three causes — two on `failed`, one on `needs_review` (new in 0.3.5, extended 0.3.8)
+### `error` is populated for four causes — three on `failed`, one on `needs_review` (new in 0.3.5, extended 0.3.8, extended 0.3.9)
 
-`error` is `null` except for the three causes below — everything else that can fail extraction still
+`error` is `null` except for the four causes below — everything else that can fail extraction still
 reports `null`. When present, it is the same shape as an error envelope's inner object (§8), minus
 the HTTP status code:
 
@@ -164,6 +168,7 @@ the HTTP status code:
 | Cause | `code` | `status` | `retryable` |
 |---|---|---|---|
 | INV-6 guard refused a hosted call ([[ARCHITECTURE]] §1, `HostedEndpointRefusedError`) | `HOSTED_ENDPOINT_REFUSED` | `failed` | `false` — the document's classification is immutable, so retrying reprocesses into the same refusal |
+| Page count over `max_pdf_pages`, or estimated OCR text over `hosted_llm_max_input_tokens` ([[ARCHITECTURE]] §2, [[decisions/ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]]) | `DOCUMENT_TOO_LARGE` | `failed` | `false` — the document's page count and text volume do not change on retry |
 | Any other unclassified exception | `INTERNAL` | `failed` | `true` |
 | LLM response truncated by `max_tokens`, and a usable partial extraction survived recovery ([[ARCHITECTURE]] §7, [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]]) | `LLM_OUTPUT_TRUNCATED` | **`needs_review`** | `true` — reprocessing has a real chance of not truncating; the model's output length is not fixed run to run |
 
@@ -176,10 +181,12 @@ If nothing recoverable survived the truncation, the document *is* `failed` and r
 
 **Still `null`:** OCR failure, LLM schema-validation failure after repair (including a truncated
 response with nothing recoverable — both report `EXTRACTION_FAILED` server-side with no further
-detail yet), and gate-coverage failure (`OrchestratorError` and its subclasses) — their cause
-reaches the server log with a `stage`, but not yet the API. This is a narrower version of the gap
-this section used to describe in full; see [[PROJECT_CONTEXT]] §7's "Known gaps" for the current
-boundary.
+detail yet), and gate-coverage failure — specifically `OCRFailedError`, `ExtractionFailedError` and
+`GateCoverageError`, the three `OrchestratorError` subclasses that do **not** populate `error`. Their
+cause reaches the server log with a `stage`, but not yet the API. **`DocumentTooLargeError` is also
+an `OrchestratorError` subclass but is not in this list** — per the table above, it is the one
+subclass whose `error` field IS populated. This is a narrower version of the gap this section used to
+describe in full; see [[PROJECT_CONTEXT]] §7's "Known gaps" for the current boundary.
 
 **`message` never contains document content, by construction, not by filtering.**
 `HOSTED_ENDPOINT_REFUSED`'s message is `HostedEndpointRefusedError`'s own text, which
@@ -188,8 +195,10 @@ classification label only. `INTERNAL`'s message is a fixed string naming only `t
 triggering exception's own text is logged server-side and never placed in the API response, because
 an arbitrary unclassified exception is exactly the case where "what does this string contain" cannot
 be answered in advance. `LLM_OUTPUT_TRUNCATED`'s message is a fixed, generic sentence — never the
-recovered field values or the raw truncated output. **Frontend: render `message` as-is; do not
-attempt to extract more detail from it than is there.**
+recovered field values or the raw truncated output. `DOCUMENT_TOO_LARGE`'s message names only the
+document id, the measured page count or estimated token count, and the configured cap it exceeded —
+never the OCR'd text itself. **Frontend: render `message` as-is; do not attempt to extract more
+detail from it than is there.**
 
 ---
 
@@ -433,17 +442,18 @@ on `filename`.
 | `EXTRACTION_FAILED` | 422 | yes |
 | `DOCUMENTS_NOT_EXPORTABLE` | 422 | no |
 | `HOSTED_ENDPOINT_REFUSED` | 422 | no |
+| `DOCUMENT_TOO_LARGE` | 422 | no |
 | `LLM_OUTPUT_TRUNCATED` | 422 | yes |
 | `RATE_LIMITED` | 429 | yes |
 | `INTERNAL` | 500 | yes |
 
-**`HOSTED_ENDPOINT_REFUSED` and `LLM_OUTPUT_TRUNCATED` never arrive as an HTTP error response.**
-Every other code in this table is returned synchronously, on the request that triggered it. These
-two only ever appear inside a terminal `GET .../status`'s `error` field (§3), because both happen
-inside the async extraction task, after the upload request that started it has already returned
-`202`. They differ in one respect: every other cause in this table (including
-`HOSTED_ENDPOINT_REFUSED`) implies `status: "failed"`; `LLM_OUTPUT_TRUNCATED` implies
-`status: "needs_review"` — see §3's note on the one exception.
+**`HOSTED_ENDPOINT_REFUSED`, `DOCUMENT_TOO_LARGE` and `LLM_OUTPUT_TRUNCATED` never arrive as an HTTP
+error response.** Every other code in this table is returned synchronously, on the request that
+triggered it. These three only ever appear inside a terminal `GET .../status`'s `error` field (§3),
+because all three happen inside the async extraction task, after the upload request that started it
+has already returned `202`. They differ in one respect: every other cause in this table (including
+`HOSTED_ENDPOINT_REFUSED` and `DOCUMENT_TOO_LARGE`) implies `status: "failed"`;
+`LLM_OUTPUT_TRUNCATED` implies `status: "needs_review"` — see §3's note on the one exception.
 
 ---
 

@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-18
-version: 1.1.5
+last_reviewed: 2026-08-19
+version: 1.1.6
 ---
 
 # PROJECT_CONTEXT.md — Second Brain
@@ -128,7 +128,10 @@ Keep this list short and honest. Move items to a decision below once resolved.
 - [ ] Concurrency limit on the L20 — how many documents in flight before latency degrades?
 - [ ] Human review: is correction mandatory below a confidence threshold, or advisory?
 - [ ] Retention: how long do we keep raw uploads?
-- [ ] Multi-page documents: one extraction per file, or per logical document?
+- [x] **Multi-page documents: one extraction per file, or per logical document?** One extraction per
+      file — every page is OCR'd and its text fed into a single LLM call, not one call per page
+      merged afterward, and not filtered down to a "relevant" subset. See
+      [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]].
 - [ ] **What generates our synthetic documents?** [[ADR-008-synthetic-generation-is-a-component]]
       decides generation is a component; it deliberately does not decide the implementation.
       Synthdog-RTL emits page-level plain text with no field boxes and no bidi ([[DATASETS]] §2), so
@@ -217,6 +220,7 @@ it with a new one.
 - [[ADR-013-single-owner-for-the-api-contract]] — `API_CONTRACT.md`'s co-ownership gate (§4) is retired: the frontend/backend split ended and Adeen owns both sides. The "not agreed" banner covering 0.2.0/0.3.0 is removed, not backfilled as reviewed — the gate is gone because the role it depended on no longer exists, not because a second reading happened.
 - [[ADR-014-hosted-processing-exception-for-two-named-documents]] — Two real PTCL documents (`Azeem.jpeg`, `Azeem.pdf`) are uploaded as `data_classification: public` for a one-off hosted-profile test, under verbal authorization. Per-document exception only, not a category or a precedent — INV-6's guard, default-deny behaviour, and code are all unchanged.
 - [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] — A response cut off by `max_tokens` (measured 1340–3201 natural tokens on a dense document against a 2000 ceiling, ~45% failure rate) is detected via `finish_reason`, never retried through the repair-prompt loop, and salvaged field-by-field against `EXTRACTION_SCHEMA.json` — forced to `needs_review`, never promoted to `complete`, and only failed outright if nothing survives. Same fallible-check-must-not-be-authoritative reasoning as [[ADR-012-provenance-merge-was-dead-code]]. `hosted_llm_max_tokens` now a measured `Settings` default (4000), not a hardcoded literal.
+- [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]] — Every page of a multi-page PDF is now OCR'd (previously page 1 only, silently) and fed into a single LLM call, not one call per page merged afterward and not a page-relevance filter. No new field-conflict/arbitration mechanism was built — the single-call design produces no per-page candidates to arbitrate; `check_arithmetic` remains the only backstop, unchanged. New fail-loud `DocumentTooLargeError`/`DOCUMENT_TOO_LARGE` fires before OCR (`max_pdf_pages`, default 50) or before the LLM call (`hosted_llm_max_input_tokens`, default 20000, an unmeasured engineering estimate — revisit once the deployed context window is confirmed).
 
 ## 9. Session protocol (for AI coding assistants)
 

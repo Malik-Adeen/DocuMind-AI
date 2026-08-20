@@ -30,6 +30,9 @@ class FakeOCR:
     def read(self, image_path: str, *, page: int = 1) -> Sequence[TextRegion]:
         return self._regions
 
+    def page_count(self, image_path: str) -> int:
+        return 1
+
 
 class Spy:
     def __init__(self, response: str) -> None:
