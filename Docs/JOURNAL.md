@@ -28,6 +28,39 @@ Entry format:
 
 <!-- newest entry goes here -->
 
+## 2026-08-22 — unrecognized document_type is coerced to unknown instead of discarding the extraction (ADR-017)
+
+**Touched:** no INV directly · `CodeBase/backend/app/pipeline/orchestrator.py` (+`_document_type_values()`,
++`_coerce_document_type()`, `_salvage_truncated_output` return type widened to `tuple[dict | None, str | None]`,
+`extract()` wraps `_validate_model_output` in a coercing closure, `status`/`review` wiring extended),
+`CodeBase/backend/tests/unit/test_orchestrator.py` (11 new tests), `CodeBase/frontend/documind-ai/src/components/screens/DocumentReview.jsx`
+(`review.reason` matching changed from `===`/`!==` to a `reasons = reason?.split(';').filter(Boolean)`
+array, since two causes can now co-occur), `Docs/API_CONTRACT.md` (0.3.9 → 0.3.10, `review.reason`
+second-cause section), `Docs/decisions/ADR-017-unrecognized-document-type-is-coerced-not-discarded.md`
+(new), `Docs/INDEX.md`, `Docs/PROJECT_CONTEXT.md` §8.
+
+**Did:** Running the real pipeline against a real 12-page addendum (multi-page fix from ADR-016
+already live), the model correctly classified it as `"addendum"` — outside `document_type.value`'s
+closed enum — and `_validate_model_output`'s single whole-response JSON Schema check discarded the
+entire otherwise-valid, gate-verifiable extraction over that one field. Fixed by coercing an
+unrecognized value to `"unknown"` (already enum-valid, already the DB column's `server_default`, zero
+schema/DB change) at both places a parsed response is accepted — the repair-loop validation path and
+inside `_salvage_truncated_output`, before its own internal validation — and recording the model's
+original string as a new `review.reason` cause, `document_type_unrecognized:<value>`. Forces
+`needs_review`, same as truncation. When both truncation and coercion fire on the same response, the
+reason is `;`-joined, truncation segment first.
+
+**Learned / broke:** `DocumentReview.jsx` matched `review.reason` with exact equality
+(`=== 'llm_output_truncated'`) — safe only while exactly one cause could ever be set. The moment two
+causes can concatenate, that check silently stops matching a truncated document the instant a
+`document_type_unrecognized` suffix is also present. Fixed to derive a `reasons` array via
+`reason?.split(';').filter(Boolean)` once, matched with `.includes`/`.some` instead of string
+equality — this is now the pattern any future third `review.reason` cause should follow, not another
+equality check.
+
+**Next:** whether `"addendum"` (or other real classifications seen in the field) should become a
+first-class enum member is explicitly deferred by ADR-017, not decided.
+
 ## 2026-08-19 — multi-page PDFs are read in full, one extraction call over every page (ADR-016)
 
 **Touched:** no INV directly (closes the open question in [[PROJECT_CONTEXT]] §7) ·

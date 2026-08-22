@@ -298,7 +298,7 @@ of what the ordinary heuristic would have computed** — a salvaged response is 
 enum.** Rather than discard an otherwise-real, otherwise-gate-verifiable extraction over one
 out-of-enum classification, the orchestrator coerces `document_type.value` to `"unknown"` server-side
 — never dropped — and records the model's original string in the reason, so nothing is silently
-lost.
+lost. See [[decisions/ADR-017-unrecognized-document-type-is-coerced-not-discarded]].
 
 ```json
 "review": { "required": true, "reason": "document_type_unrecognized:addendum" }
