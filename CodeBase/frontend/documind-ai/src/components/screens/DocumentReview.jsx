@@ -735,7 +735,7 @@ export default function DocumentReview({ documentId, onBack }) {
                     </div>
                   )}
 
-                  {extraction.review?.required && extraction.review.reason === 'llm_output_truncated' && (
+                  {extraction.review?.required && extraction.review.reason?.startsWith('llm_output_truncated') && (
                     <Alert variant="warning">
                       <AlertTriangle className="w-4 h-4" />
                       <AlertDescription>
@@ -746,7 +746,7 @@ export default function DocumentReview({ documentId, onBack }) {
                     </Alert>
                   )}
 
-                  {extraction.review?.required && extraction.review.reason !== 'llm_output_truncated' && (
+                  {extraction.review?.required && !extraction.review.reason?.startsWith('llm_output_truncated') && (
                     <Alert variant="warning">
                       <AlertCircle className="w-4 h-4" />
                       <AlertDescription>

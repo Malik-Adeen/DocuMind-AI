@@ -23,8 +23,11 @@ from app.pipeline.orchestrator import (
     ExtractionFailedError,
     GateCoverageError,
     OCRFailedError,
+    _coerce_document_type,
+    _document_type_values,
     extract,
 )
+from app.schemas.extraction import extraction_schema
 
 IBAN_VALID = "PK36SCBL0000001123456702"
 IBAN_BAD_CHECKSUM = "PK70BANK0000001234567890"
@@ -193,6 +196,7 @@ def test_happy_path_all_gates_pass_routes_complete() -> None:
     assert outcome.result["fields"]["subtotal"]["verified"] is True
     assert outcome.result["fields"]["total"]["verified"] is True
     assert outcome.result["review"]["required"] is False
+    assert "reason" not in outcome.result["review"]
     gate_names = {g["name"] for g in outcome.result["gates"]}
     assert {"iban_checksum", "line_item_sum", "arithmetic_reconciliation"} <= gate_names
     assert len(spy.calls) == 1
@@ -666,3 +670,152 @@ def test_line_item_field_provenance_is_attached() -> None:
 
     source = outcome.result["line_items"][0]["description"]["source"]
     assert source["bbox"] == [0.1, 0.1, 0.5, 0.2]
+
+
+def _body_with_bad_document_type_and_null_raw_text(document_type: str) -> str:
+    return json.dumps(
+        {
+            "document_type": {"value": document_type, "confidence": 0.9},
+            "fields": {
+                "mrc": {
+                    "value": None,
+                    "confidence": 0.0,
+                    "verified": False,
+                    "source": {"origin": "llm_inferred", "raw_text": None},
+                }
+            },
+        }
+    )
+
+
+def test_coerce_document_type_recognized_value_is_a_noop() -> None:
+    parsed = {"document_type": {"value": "invoice", "confidence": 0.9}}
+
+    assert _coerce_document_type(parsed) is None
+    assert parsed["document_type"]["value"] == "invoice"
+
+
+def test_coerce_document_type_unrecognized_value_is_coerced_to_unknown() -> None:
+    parsed = {"document_type": {"value": "addendum", "confidence": 0.87}}
+
+    original = _coerce_document_type(parsed)
+
+    assert original == "addendum"
+    assert parsed["document_type"]["value"] == "unknown"
+    assert parsed["document_type"]["confidence"] == 0.87
+
+
+def test_coerce_document_type_missing_or_none_value_is_a_noop() -> None:
+    parsed_none = {"document_type": {"value": None, "confidence": 0.0}}
+    assert _coerce_document_type(parsed_none) is None
+    assert parsed_none["document_type"]["value"] is None
+
+    parsed_missing_value: dict[str, Any] = {"document_type": {"confidence": 0.0}}
+    assert _coerce_document_type(parsed_missing_value) is None
+    assert "value" not in parsed_missing_value["document_type"]
+
+
+def test_coerce_document_type_missing_or_non_dict_document_type_is_a_noop() -> None:
+    assert _coerce_document_type({}) is None
+
+    parsed_non_dict = {"document_type": "invoice"}
+    assert _coerce_document_type(parsed_non_dict) is None
+    assert parsed_non_dict["document_type"] == "invoice"
+
+
+def test_document_type_values_matches_schema_enum_exactly() -> None:
+    schema = extraction_schema()
+    expected = frozenset(schema["properties"]["document_type"]["properties"]["value"]["enum"])
+
+    assert _document_type_values() == expected
+
+
+def test_unrecognized_document_type_is_coerced_and_routes_needs_review() -> None:
+    fields = {
+        "iban": llm_field(IBAN_VALID, confidence=0.5, verified=True),
+        "subtotal": llm_field("10000.00"),
+        "tax": llm_field("1700.00"),
+        "total": llm_field("11700.00"),
+    }
+    line_items = [_line_item("1", "10000.00", "10000.00")]
+    llm, spy = hosted_llm(llm_body(fields, document_type="addendum", line_items=line_items))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.status == "needs_review"
+    assert outcome.result["document_type"]["value"] == "unknown"
+    assert outcome.result["review"]["required"] is True
+    assert outcome.result["review"]["reason"] == "document_type_unrecognized:addendum"
+    assert outcome.result["fields"]["iban"]["verified"] is True
+    assert outcome.result["fields"]["subtotal"]["verified"] is True
+    assert outcome.result["fields"]["total"]["verified"] is True
+    assert len(spy.calls) == 1
+
+
+def test_truncated_and_unrecognized_document_type_both_report_concatenated_reason() -> None:
+    po_field = llm_field("PO-2291", source={"origin": "llm_inferred", "raw_text": "PO-2291"})
+    iban_field = llm_field(IBAN_VALID, source={"origin": "llm_inferred", "raw_text": IBAN_VALID})
+    truncated_body = (
+        '{"document_type": {"value": "addendum", "confidence": 0.87}, "fields": {'
+        f'"po_number": {json.dumps(po_field)}, '
+        f'"iban": {json.dumps(iban_field)}, '
+        '"notes": {"value": "terms and conditions that go on for a while and then just sto'
+    )
+    llm, spy = truncating_hosted_llm(truncated_body)
+
+    outcome = extract(document(), ocr=FakeOCR(regions(IBAN_VALID)), llm=llm)
+
+    assert outcome.truncated is True
+    assert outcome.status == "needs_review"
+    assert outcome.result["document_type"]["value"] == "unknown"
+    assert (
+        outcome.result["review"]["reason"]
+        == "llm_output_truncated;document_type_unrecognized:addendum"
+    )
+    assert len(spy.calls) == 1
+
+
+def test_truncated_response_with_only_defect_being_unrecognized_document_type_still_recovers() -> (
+    None
+):
+    truncated_body = (
+        '{"document_type": {"value": "addendum", "confidence": 0.95}, "fields": {'
+        f'"po_number": {json.dumps(llm_field("PO-2291"))}, '
+        '"total": {"value": "45000.0'
+    )
+    llm, spy = truncating_hosted_llm(truncated_body)
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.truncated is True
+    assert "po_number" in outcome.result["fields"]
+    assert "total" not in outcome.result["fields"]
+    assert outcome.result["document_type"]["value"] == "unknown"
+    assert (
+        outcome.result["review"]["reason"]
+        == "llm_output_truncated;document_type_unrecognized:addendum"
+    )
+    assert len(spy.calls) == 1
+
+
+def test_repair_loop_overwrites_stale_document_type_coercion_from_a_superseded_attempt() -> None:
+    attempt_1 = _body_with_bad_document_type_and_null_raw_text("addendum")
+    attempt_2 = llm_body({"iban": llm_field(IBAN_VALID)}, document_type="invoice")
+    llm, spy = hosted_llm_sequence([attempt_1, attempt_2])
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.result["document_type"]["value"] == "invoice"
+    assert outcome.status == "complete"
+    assert "reason" not in outcome.result["review"]
+    assert len(spy.calls) == 2
+
+
+def test_unrecognized_document_type_alone_is_accepted_on_first_attempt_no_wasted_retry() -> None:
+    fields = {"iban": llm_field(IBAN_VALID)}
+    llm, spy = hosted_llm(llm_body(fields, document_type="addendum"))
+
+    outcome = extract(document(), ocr=FakeOCR(regions()), llm=llm)
+
+    assert outcome.result["document_type"]["value"] == "unknown"
+    assert len(spy.calls) == 1
