@@ -1,13 +1,13 @@
 ---
 status: draft
 owner: Adeen
-last_reviewed: 2026-08-19
-version: 0.3.9
+last_reviewed: 2026-08-22
+version: 0.3.10
 ---
 
 # API_CONTRACT.md
 
-**Version:** 0.3.9 · **Status:** Draft — freeze before frontend work starts
+**Version:** 0.3.10 · **Status:** Draft — freeze before frontend work starts
 **Owner:** Adeen, backend and frontend both. Single owner as of
 [[decisions/ADR-013-single-owner-for-the-api-contract]] (2026-08-14) — previously co-owned with a
 separate frontend developer; see that ADR for what changed. Changes still land with the version
@@ -275,7 +275,7 @@ the two the same hides exactly the failure this flag exists to surface.
 trusted as-is. It never implies a fabricated `page`/`bbox`: a field with `unmatched: true` never
 also carries `page`/`bbox`, since those are set only on a successful match.
 
-### `review.reason` is populated for one cause: `llm_output_truncated` (new in 0.3.8)
+### `review.reason` is populated for two causes — `llm_output_truncated`, `document_type_unrecognized:<value>` (new in 0.3.8, extended in 0.3.10)
 
 `review.reason` was declared in `EXTRACTION_SCHEMA.json` from early on (`examples:
 ["gate_failed:arithmetic_reconciliation", "low_confidence:mrc"]`) but nothing ever set it — every
@@ -294,10 +294,38 @@ schema-validated recovery to be worth showing a reviewer — see [[ARCHITECTURE]
 of what the ordinary heuristic would have computed** — a salvaged response is never promoted to
 `complete` on its own, even if every recovered field happens to gate-verify.
 
+**The second cause (0.3.10): the model classified `document_type.value` outside the schema's closed
+enum.** Rather than discard an otherwise-real, otherwise-gate-verifiable extraction over one
+out-of-enum classification, the orchestrator coerces `document_type.value` to `"unknown"` server-side
+— never dropped — and records the model's original string in the reason, so nothing is silently
+lost. See [[decisions/ADR-017-unrecognized-document-type-is-coerced-not-discarded]].
+
+```json
+"review": { "required": true, "reason": "document_type_unrecognized:addendum" }
+```
+
+This also forces `needs_review` regardless of the ordinary heuristic, for the same reason as
+truncation: a coerced classification is not a case a reviewer should see silently marked `complete`.
+
+**Both causes are additive, not exclusive — concatenated with `;`, truncation segment always
+first when both occur:**
+
+```json
+"review": { "required": true, "reason": "llm_output_truncated;document_type_unrecognized:addendum" }
+```
+
+**Frontend: match with `reason?.startsWith('llm_output_truncated')`, never `===`.** Because the two
+causes concatenate, an exact-equality check silently stops matching a truncated document the moment
+a `document_type_unrecognized` suffix is also present. `DocumentReview.jsx`'s truncation alert uses
+`startsWith` for exactly this reason — the `;`-join and truncation-always-first ordering are relied
+upon by that check, so preserve both if this convention ever changes.
+
 **Frontend: `review.reason` is a short machine-oriented label, not the message to show a reviewer.**
 For `llm_output_truncated`, fetch `GET .../status` and render `error.message` (§3) instead — the
 fuller, human-readable sentence lives there, using the same envelope shape every other structured
-error in this API uses.
+error in this API uses. For `document_type_unrecognized:<value>`, there is no separate `error`/status
+detail to fetch — the reason string itself is the full detail, since the model's original
+classification is already embedded in it.
 
 ### `pipeline_version.profile` (new in 0.3.0)
 

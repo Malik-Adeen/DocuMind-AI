@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-19
-version: 1.2.4
+last_reviewed: 2026-08-22
+version: 1.2.5
 ---
 
 # INDEX.md — map of content
@@ -51,6 +51,7 @@ Summary list in [[PROJECT_CONTEXT]] §8.
 | [[ADR-014-hosted-processing-exception-for-two-named-documents]] | Why `Azeem.jpeg` and `Azeem.pdf` are uploaded `public` for a hosted-profile test under verbal authorization, why this is per-document and not a precedent, and why INV-6 itself is untouched | Adeen | Before treating this ADR as license to classify any other real document `public`, and before citing it as a general exception rather than a two-document one |
 | [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] | Why a `max_tokens`-truncated LLM response is detected via `finish_reason`, salvaged field-by-field instead of retried through the repair prompt, and forced to `needs_review` rather than `failed` or `complete` — and why `hosted_llm_max_tokens` is now a measured `Settings` default, not a hardcoded literal | Adeen | Before touching `HostedChatTransport`, `complete_with_repair`, or the truncation/salvage path in `orchestrator.py`; before assuming any `document.error` implies `status: "failed"` |
 | [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]] | Why every page of a multi-page PDF is now OCR'd and read in a single LLM call rather than per-page calls merged afterward, why no new field-conflict/arbitration mechanism was built, and why `hosted_llm_max_input_tokens` is an unmeasured estimate, not a measurement | Adeen | Before touching `_run_ocr`, `page_count()`, or `build_prompt`'s page grouping; before assuming a cross-page field conflict has any backstop beyond `check_arithmetic` |
+| [[ADR-017-unrecognized-document-type-is-coerced-not-discarded]] | Why an LLM-classified `document_type.value` outside the closed enum is coerced to `"unknown"` and surfaced via `review.reason` instead of discarding the whole extraction, and why widening the enum was rejected | Adeen | Before touching `_coerce_document_type`, `_validate_model_output`, or `_salvage_truncated_output`'s document_type handling; before assuming `review.reason` only ever has one cause |
 
 ## Code
 

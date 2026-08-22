@@ -1,8 +1,8 @@
 ---
 status: active
 owner: Adeen
-last_reviewed: 2026-08-19
-version: 1.1.6
+last_reviewed: 2026-08-22
+version: 1.1.7
 ---
 
 # PROJECT_CONTEXT.md — Second Brain
@@ -221,6 +221,7 @@ it with a new one.
 - [[ADR-014-hosted-processing-exception-for-two-named-documents]] — Two real PTCL documents (`Azeem.jpeg`, `Azeem.pdf`) are uploaded as `data_classification: public` for a one-off hosted-profile test, under verbal authorization. Per-document exception only, not a category or a precedent — INV-6's guard, default-deny behaviour, and code are all unchanged.
 - [[ADR-015-truncated-llm-output-is-salvaged-not-repaired]] — A response cut off by `max_tokens` (measured 1340–3201 natural tokens on a dense document against a 2000 ceiling, ~45% failure rate) is detected via `finish_reason`, never retried through the repair-prompt loop, and salvaged field-by-field against `EXTRACTION_SCHEMA.json` — forced to `needs_review`, never promoted to `complete`, and only failed outright if nothing survives. Same fallible-check-must-not-be-authoritative reasoning as [[ADR-012-provenance-merge-was-dead-code]]. `hosted_llm_max_tokens` now a measured `Settings` default (4000), not a hardcoded literal.
 - [[ADR-016-multi-page-pdfs-are-one-extraction-not-a-merge]] — Every page of a multi-page PDF is now OCR'd (previously page 1 only, silently) and fed into a single LLM call, not one call per page merged afterward and not a page-relevance filter. No new field-conflict/arbitration mechanism was built — the single-call design produces no per-page candidates to arbitrate; `check_arithmetic` remains the only backstop, unchanged. New fail-loud `DocumentTooLargeError`/`DOCUMENT_TOO_LARGE` fires before OCR (`max_pdf_pages`, default 50) or before the LLM call (`hosted_llm_max_input_tokens`, default 20000, an unmeasured engineering estimate — revisit once the deployed context window is confirmed).
+- [[ADR-017-unrecognized-document-type-is-coerced-not-discarded]] — An LLM-classified `document_type.value` outside the closed enum (e.g. `"addendum"`, seen on a real 12-page addendum) no longer discards the whole extraction. Coerced to `"unknown"` server-side — already the DB default, already enum-valid, zero schema change — with the model's original string surfaced via `review.reason: "document_type_unrecognized:<value>"`, forcing `needs_review` the same way truncation does. Concatenates with the truncation cause via `;` (truncation first) rather than either clobbering the other. Widening the enum to accept the value outright was rejected — deliberately left as a separate, undecided question.
 
 ## 9. Session protocol (for AI coding assistants)
 

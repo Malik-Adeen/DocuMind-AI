@@ -85,6 +85,13 @@ def _money_field_names() -> frozenset[str]:
     )
 
 
+@lru_cache
+def _document_type_values() -> frozenset[str]:
+    return frozenset(
+        extraction_schema()["properties"]["document_type"]["properties"]["value"]["enum"]
+    )
+
+
 LINE_ITEM_MONEY_FIELDS = frozenset({"unit_price", "line_total"})
 
 
@@ -139,6 +146,17 @@ def _format_validation_error(error: ValidationError) -> str:
     return f"{path}: {error.message}"
 
 
+def _coerce_document_type(parsed: dict[str, Any]) -> str | None:
+    document_type = parsed.get("document_type")
+    if not isinstance(document_type, dict):
+        return None
+    value = document_type.get("value")
+    if value is None or value in _document_type_values():
+        return None
+    document_type["value"] = "unknown"
+    return value if isinstance(value, str) else str(value)
+
+
 def _validate_model_output(parsed: Mapping[str, Any]) -> None:
     errors = sorted(_model_output_validator().iter_errors(parsed), key=lambda e: list(e.path))
     if errors:
@@ -146,7 +164,7 @@ def _validate_model_output(parsed: Mapping[str, Any]) -> None:
         raise ExtractionFailedError(f"LLM output failed schema validation: {detail}")
 
 
-def _salvage_truncated_output(content: str) -> dict[str, Any] | None:
+def _salvage_truncated_output(content: str) -> tuple[dict[str, Any] | None, str | None]:
     """Best-effort recovery from a response cut short by max_tokens (finish_reason == "length").
 
     Not a repair-prompt retry — asking the model to fix output that is not wrong, only unfinished,
@@ -160,9 +178,9 @@ def _salvage_truncated_output(content: str) -> dict[str, Any] | None:
     try:
         repaired = json_repair.repair_json(content, return_objects=True)
     except Exception:
-        return None
+        return None, None
     if not isinstance(repaired, dict):
-        return None
+        return None, None
 
     fields = repaired.get("fields")
     cleaned_fields: dict[str, Any] = {}
@@ -190,13 +208,15 @@ def _salvage_truncated_output(content: str) -> dict[str, Any] | None:
     repaired["line_items"] = cleaned_line_items
 
     if not cleaned_fields and not cleaned_line_items:
-        return None
+        return None, None
+
+    coerced = _coerce_document_type(repaired)
 
     try:
         _validate_model_output(repaired)
     except ExtractionFailedError:
-        return None
-    return repaired
+        return None, None
+    return repaired, coerced
 
 
 def _reset_verification(fields: dict[str, Any]) -> None:
@@ -296,15 +316,22 @@ def extract(
 
     prompt = build_prompt_fn(text_regions)
     truncated = False
+    coerced_document_type: str | None = None
+
+    def _validate(parsed: dict[str, Any]) -> None:
+        nonlocal coerced_document_type
+        coerced_document_type = _coerce_document_type(parsed)
+        _validate_model_output(parsed)
+
     try:
         parsed = complete_with_repair(
             lambda p: llm.complete(p, document=document),
             prompt,
-            validate=_validate_model_output,
+            validate=_validate,
             max_retries=max_repair_retries,
         )
     except TruncatedResponseError as exc:
-        salvaged = _salvage_truncated_output(exc.content)
+        salvaged, salvage_coerced = _salvage_truncated_output(exc.content)
         if salvaged is None:
             raise ExtractionFailedError(
                 "LLM output was truncated by the token limit and no usable field or line item "
@@ -312,6 +339,7 @@ def extract(
             ) from exc
         parsed = salvaged
         truncated = True
+        coerced_document_type = salvage_coerced
     except RepairExhaustedError as exc:
         raise ExtractionFailedError(str(exc)) from exc
 
@@ -335,13 +363,18 @@ def extract(
     # and must never be authoritative enough to promote a document to complete on its own.
     status = (
         "needs_review"
-        if truncated or _needs_review(fields, provenance.unmatched_claims)
+        if truncated
+        or coerced_document_type is not None
+        or _needs_review(fields, provenance.unmatched_claims)
         else "complete"
     )
 
     review: dict[str, Any] = {"required": status != "complete"}
     if truncated:
         review["reason"] = "llm_output_truncated"
+    if coerced_document_type is not None:
+        suffix = f"document_type_unrecognized:{coerced_document_type}"
+        review["reason"] = f"{review['reason']};{suffix}" if "reason" in review else suffix
 
     result: dict[str, Any] = {
         "document_id": document.document_id,

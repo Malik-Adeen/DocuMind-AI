@@ -565,6 +565,8 @@ export default function DocumentReview({ documentId, onBack }) {
     return fieldBBox(field);
   }, [highlightedField, extraction]);
 
+  const reasons = extraction?.review?.reason?.split(';').filter(Boolean) ?? [];
+
   return (
     <div className="flex-1 flex overflow-hidden w-full h-full animate-fadeIn">
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden w-full">
@@ -735,7 +737,7 @@ export default function DocumentReview({ documentId, onBack }) {
                     </div>
                   )}
 
-                  {extraction.review?.required && extraction.review.reason === 'llm_output_truncated' && (
+                  {extraction.review?.required && reasons.includes('llm_output_truncated') && (
                     <Alert variant="warning">
                       <AlertTriangle className="w-4 h-4" />
                       <AlertDescription>
@@ -746,11 +748,11 @@ export default function DocumentReview({ documentId, onBack }) {
                     </Alert>
                   )}
 
-                  {extraction.review?.required && extraction.review.reason !== 'llm_output_truncated' && (
+                  {extraction.review?.required && reasons.some(r => r !== 'llm_output_truncated') && (
                     <Alert variant="warning">
                       <AlertCircle className="w-4 h-4" />
                       <AlertDescription>
-                        Review required{extraction.review.reason ? `: ${extraction.review.reason}` : ''}
+                        Review required{reasons.filter(r => r !== 'llm_output_truncated').length > 0 ? `: ${reasons.filter(r => r !== 'llm_output_truncated').join('; ')}` : ''}
                       </AlertDescription>
                     </Alert>
                   )}
